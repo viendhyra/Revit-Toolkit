@@ -2345,6 +2345,48 @@ function Set-AllAutodeskInternet {
 }
 
 # Firewall App Blocker (sordum.org) из папки рядом со скриптом. Видит и правила этого скрипта.
+function Get-NlmExecutables {
+    $base = ${env:ProgramFiles(x86)}
+    if (-not $base) { $base = $env:ProgramFiles }
+    $folder = Join-Path $base 'Common Files\Autodesk Shared\Network License Manager'
+    if (-not (Test-Path -LiteralPath $folder -PathType Container)) { return @() }
+    return @(Get-ChildItem -LiteralPath $folder -Filter '*.exe' -File -Recurse -ErrorAction Stop |
+        Where-Object { $_.Name -ine 'Revit.exe' } | ForEach-Object { $_.FullName } | Sort-Object -Unique)
+}
+
+function Set-NlmInternet {
+    param([bool]$Block)
+    $group = 'Revit Toolkit - Network License Manager'
+    $executables = @()
+    if ($Block) {
+        $executables = @(Get-NlmExecutables)
+        if (-not $executables.Count) { Write-AutodeskLog 'EXE Network License Manager не найдены.' WARN; return }
+        foreach ($path in $executables) { Write-Info "Network License Manager: $path" }
+    }
+    if (Test-DryRun "Network License Manager: блокировка исходящей сети = $Block; правила Revit не изменяются") { return }
+    if (-not (Assert-Admin)) { return }
+    if (-not (Confirm-Action -Question "Network License Manager: блокировка исходящей сети = $Block ? Блок включает локальную сеть и может нарушить сетевое лицензирование." -Danger)) { return }
+    if (-not $Block) {
+        Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
+        Write-AutodeskLog 'Удалены правила Network License Manager этого модуля.' OK
+        return
+    }
+    foreach ($path in $executables) {
+        $name = (Get-AllRuleName $path) -replace '^ADE-ALL-', 'RTK-NLM-'
+        try {
+            $existing = Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
+            if ($existing) {
+                if ($existing.Group -ne $group) { throw 'Совпало имя чужого правила; оно не изменено.' }
+                $existing | Set-NetFirewallRule -Direction Outbound -Profile Any -Action Block -Enabled True -ErrorAction Stop
+            } else {
+                New-NetFirewallRule -Name $name -DisplayName "Network License Manager - $([IO.Path]::GetFileName($path))" `
+                    -Group $group -Direction Outbound -Action Block -Program $path -Profile Any -Enabled True -ErrorAction Stop | Out-Null
+            }
+            Write-AutodeskLog "Заблокирована исходящая сеть: $path" OK
+        } catch { Write-AutodeskLog "Ошибка блокировки '$path': $($_.Exception.Message)" ERROR }
+    }
+}
+
 function Start-Fab {
     $exe = if ([Environment]::Is64BitOperatingSystem) { 'Fab_x64.exe' } else { 'Fab.exe' }
     $fab = Get-ChildItem -LiteralPath $ScriptRoot -Directory -Filter 'Fab*' -ErrorAction SilentlyContinue |
@@ -2519,6 +2561,8 @@ function Invoke-Remove {
         [pscustomobject]@{ Key='8'; Title='Revit: удалить правила Public'; Desc='Удаление блокировок утилиты' },
         [pscustomobject]@{ Key='a'; Title='Все Autodesk: блокировать сеть'; Desc='Все найденные EXE, оба направления, все профили' },
         [pscustomobject]@{ Key='b'; Title='Все Autodesk: удалить блокировки'; Desc='Только правила утилиты' },
+        [pscustomobject]@{ Key='n'; Title='Network License Manager: блокировать сеть'; Desc='Только EXE этой папки; исходящий трафик, все профили' },
+        [pscustomobject]@{ Key='u'; Title='Network License Manager: удалить блокировку'; Desc='Только правила этого модуля; Revit не изменяется' },
         [pscustomobject]@{ Key='f'; Title='Открыть Firewall App Blocker'; Desc='Необязательно: папка Fab* рядом со скриптом' }
     )
     while ($true) {
@@ -2536,6 +2580,8 @@ function Invoke-Remove {
                 '8' { Set-ProductInternet Revit $false }
                 'a' { Set-AllAutodeskInternet $true }
                 'b' { Set-AllAutodeskInternet $false }
+                'n' { Set-NlmInternet $true }
+                'u' { Set-NlmInternet $false }
                 'f' { Start-Fab }
             }
         } catch { Write-AutodeskLog $_.Exception.Message ERROR }
