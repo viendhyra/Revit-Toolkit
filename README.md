@@ -1,10 +1,10 @@
 # Revit Toolkit
 
 Единый терминальный хаб для обслуживания Autodesk Revit и Revit Server.
-Объединяет пять отдельных скриптов в один файл с общим UI, логом и режимом сухого прогона.
+Объединяет утилиты обслуживания, настройки Defender и сетевые правила Autodesk в один файл с общим UI, логом и режимом сухого прогона.
 
 ```
-  Revit Toolkit v1.0.0 · SRV-BIM01 · PS 5.1.19041.4648 · admin
+  Revit Toolkit v1.1.0 · SRV-BIM01 · PS 5.1.19041.4648 · admin
   Стрелки + Enter или номер пункта · 0 — назад/выход
   ──────────────────────────────────────────────────────────────
 
@@ -22,12 +22,40 @@
        Следы установки, реестр, AdskLicensing
     6  Backup-папки и журналы
        Поиск *_backup с парным .rvt, старые журналы, CSV-отчёт
+    7  Autodesk: Defender и сеть
+       Исключения, откат, сетевые блокировки, Network License Manager
     9  Настройки сессии
 
     0  Выход
 ```
 
 ## Запуск
+
+### Прямо из GitHub
+
+Откройте **Windows Terminal / PowerShell от имени администратора** и вставьте команду целиком. Git и клонирование репозитория не нужны. Команда скачивает актуальный скрипт из ветки `main` в `%LOCALAPPDATA%\RevitToolkit` и открывает меню:
+
+```powershell
+& { $ErrorActionPreference = 'Stop'; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; $toolkitDir = Join-Path $env:LOCALAPPDATA 'RevitToolkit'; New-Item -ItemType Directory -Path $toolkitDir -Force | Out-Null; $toolkitScript = Join-Path $toolkitDir 'RevitToolkit.ps1'; Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/viendhyra/Revit-Toolkit/main/RevitToolkit.ps1' -OutFile $toolkitScript -ErrorAction Stop; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $toolkitScript }
+```
+
+Чтобы первый запуск был сухим прогоном, добавьте `-DryRun` после `-File $toolkitScript` в конце команды. Подтверждения изменений остаются включены; запуск открывает меню и сам настройки не применяет. При ошибке скачивания запуск прерывается.
+
+Повторный запуск уже скачанной версии без интернета:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\RevitToolkit\RevitToolkit.ps1"
+```
+
+Запуск скачанного модуля Autodesk с сухим прогоном:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\RevitToolkit\RevitToolkit.ps1" -Module autodesk -DryRun
+```
+
+Для обновления снова выполните первую команду. `ExtraPaths.txt` и необязательную папку `Fab*` размещайте в `%LOCALAPPDATA%\RevitToolkit` рядом со скачанным скриптом.
+
+### Из локальной папки
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\RevitToolkit.ps1
