@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 $errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'RevitToolkit.ps1'),[ref]$null,[ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
-foreach ($name in @('Get-PersonalAcceleratorProductCode','Get-PersonalAcceleratorEntry','Invoke-PersonalAcceleratorRemoval')) {
+foreach ($name in @('Get-PersonalAcceleratorProductCode','Get-PersonalAcceleratorEntry','Invoke-PersonalAcceleratorRemoval','Show-PersonalAcceleratorRecovery')) {
     $f=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
     . ([scriptblock]::Create($f.Extent.Text))
 }
@@ -34,7 +34,8 @@ function Get-Process { param($Name,$ErrorAction) if ($Script:RevitRunning) { ret
 function Start-Process {
     param($FilePath,$ArgumentList,[switch]$Wait,[switch]$PassThru,$ErrorAction)
     $Script:Launches++
-    if ($FilePath -ne (Join-Path $env:WINDIR 'System32\msiexec.exe') -or $ArgumentList[0] -ne '/x' -or $ArgumentList[1] -ne $code -or $ArgumentList[2] -ne '/norestart' -or $ArgumentList[3] -ne '/L*v' -or -not $Wait) { throw 'Unsafe MSI launch' }
+    if ($FilePath -eq 'https://support.microsoft.com/en-us/windows/deployment/install-upgrade/fix-problems-that-block-programs-from-being-installed-or-removed') { $Script:HelpOpened=$true; return }
+    if ($FilePath -ne (Join-Path $env:WINDIR 'System32\msiexec.exe') -or $ArgumentList[0] -ne '/x' -or $ArgumentList[1] -ne $code -or $ArgumentList[2] -ne '/norestart' -or $ArgumentList[3] -ne '/qn' -or $ArgumentList[4] -ne '/L*v' -or -not $Wait) { throw 'Unsafe MSI launch' }
     if ($Script:ExitCode -eq 0 -and -not $Script:KeepRegistration) { $Script:Entries=@() }
     return [pscustomobject]@{ExitCode=$Script:ExitCode}
 }
@@ -42,6 +43,7 @@ $Script:Root=Join-Path $env:TEMP ('ToolkitPacrTest-'+[guid]::NewGuid().ToString(
 $Script:Launches=0; $Script:Success=0; $Script:DryRun=$true; $Script:Confirm=$true
 try {
     Invoke-PersonalAcceleratorRemoval
+    Show-PersonalAcceleratorRecovery
     if ($Script:Launches -or (Test-Path $Script:Root)) { throw 'Dry run performed mutations' }
     $Script:DryRun=$false; $Script:RevitRunning=$true; $blocked=$false
     try { Invoke-PersonalAcceleratorRemoval } catch { $blocked=$true }
@@ -58,6 +60,9 @@ try {
     $Script:ExitCode=3010
     Invoke-PersonalAcceleratorRemoval
     if ($Script:Success) { throw 'Pending reboot reported as completed uninstall' }
+    foreach ($exitCode in @(1612,1706)) { $Script:ExitCode=$exitCode; Invoke-PersonalAcceleratorRemoval; if ($Script:Success) { throw 'Missing source reported as successful uninstall' } }
+    Show-PersonalAcceleratorRecovery
+    if (-not $Script:HelpOpened -or -not $Script:Entries.Count) { throw 'Recovery help did not open or mutated registration' }
     $Script:ExitCode=0; $Script:KeepRegistration=$true; $blocked=$false
     try { Invoke-PersonalAcceleratorRemoval } catch { $blocked=$true }
     if (-not $blocked) { throw 'Remaining registration ignored' }
