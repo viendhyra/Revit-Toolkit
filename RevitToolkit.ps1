@@ -14,10 +14,14 @@
       6. Сводка окружения (что установлено, что настроено)
 
 .PARAMETER Module
-    Запуск конкретного модуля без меню: status | iis | maxbytes | accel | clean | backups | autodesk
+    Запуск конкретного модуля без меню: status | iis | maxbytes | accel | clean | backups | autodesk | rsn
 
 .PARAMETER DryRun
     Сухой прогон: всё ищется и показывается, но ничего не удаляется и не меняется.
+
+.PARAMETER Language
+    Язык интерфейса: ru | en. Без параметра используется сохранённый выбор;
+    при первом интерактивном запуске предлагается выбрать язык.
 
 .PARAMETER Yes
     Не задавать подтверждений (для автоматизации). Использовать осознанно.
@@ -40,8 +44,11 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('', 'status', 'iis', 'maxbytes', 'accel', 'clean', 'backups', 'autodesk')]
+    [ValidateSet('', 'status', 'iis', 'maxbytes', 'accel', 'clean', 'backups', 'autodesk', 'rsn')]
     [string]$Module = '',
+
+    [ValidateSet('', 'ru', 'en')]
+    [string]$Language = '',
 
     [switch]$DryRun,
     [switch]$Yes,
@@ -59,6 +66,53 @@ $ErrorActionPreference = 'Stop'
 $Script:AppName    = 'Revit Toolkit'
 $Script:AppVersion = '1.1.0'
 $Script:Root       = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+$Script:UiLanguage = 'ru'
+$Script:LanguageFile = Join-Path $env:LOCALAPPDATA 'RevitToolkit\language.txt'
+
+function Get-UiText {
+    param([string]$Russian, [string]$English)
+    if ($Script:UiLanguage -eq 'en') { return $English }
+    return $Russian
+}
+
+function Save-UiLanguage {
+    try {
+        $directory = Split-Path -Parent $Script:LanguageFile
+        New-Item -ItemType Directory -Path $directory -Force -ErrorAction Stop | Out-Null
+        Set-Content -LiteralPath $Script:LanguageFile -Value $Script:UiLanguage -Encoding ASCII -ErrorAction Stop
+    } catch {
+        Write-Warn (Get-UiText 'Не удалось сохранить язык. Выбор действует до конца сессии.' 'Could not save language. The selection applies to this session only.')
+    }
+}
+
+function Select-UiLanguage {
+    Write-Banner
+    Write-Blank
+    Write-Host '  Язык интерфейса / Interface language'
+    Write-Host '  [1] Русский'
+    Write-Host '  [2] English'
+    while ($true) {
+        $answer = Read-Host '  1 / 2'
+        switch ($answer.Trim().ToLowerInvariant()) {
+            { $_ -in @('1', 'ru') } { $Script:UiLanguage = 'ru'; Save-UiLanguage; return }
+            { $_ -in @('2', 'en') } { $Script:UiLanguage = 'en'; Save-UiLanguage; return }
+        }
+        Write-Host '  Выберите 1 или 2 / Choose 1 or 2'
+    }
+}
+
+function Initialize-UiLanguage {
+    if ($Language) { $Script:UiLanguage = $Language; return }
+    if (Test-Path -LiteralPath $Script:LanguageFile -PathType Leaf) {
+        try {
+            $saved = (Get-Content -LiteralPath $Script:LanguageFile -Raw -ErrorAction Stop).Trim()
+            if ($saved -in @('ru', 'en')) { $Script:UiLanguage = $saved.ToLowerInvariant(); return }
+        } catch { }
+    }
+    # Piped/automated runs use Russian unless -Language is supplied.
+    try { if ([Console]::IsInputRedirected) { return } } catch { return }
+    Select-UiLanguage
+}
 
 $Script:Ctx = [pscustomobject]@{
     DryRun    = [bool]$DryRun
@@ -359,7 +413,7 @@ function Show-Menu {
     param(
         [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [array]$Items,
         [string]$Title = '',
-        [string]$BackText = 'Выход'
+        [string]$BackText = (Get-UiText 'Выход' 'Exit')
     )
     if (-not $Items.Count) { return '0' }
     $index = 0
@@ -398,12 +452,12 @@ function Show-Menu {
             Write-Blank
             Write-Rule
             Write-Host ('  ' + $Script:C.Text + (Format-UiText $Items[$index].Desc ($Script:Ctx.Width - 4)) + $Script:C.Reset)
-            if ($rows -lt $Items.Count) { Write-Meta ("{0}/{1}  ·  остальные пункты: стрелки" -f ($index + 1), $Items.Count) }
+            if ($rows -lt $Items.Count) { Write-Meta ((Get-UiText "{0}/{1}  ·  остальные пункты: стрелки" "{0}/{1}  ·  more items: arrow keys") -f ($index + 1), $Items.Count) }
             Write-Blank
-            Write-Meta "0  $BackText   /   стрелки + Enter   /   клавиша пункта"
+            Write-Meta (Get-UiText "0  $BackText   /   стрелки + Enter   /   клавиша пункта" "0  $BackText   /   arrows + Enter   /   item key")
             $firstFrame = $false
             if (-not $useKeys) {
-                $answer = (Read-Host '  Выбор').Trim()
+                $answer = (Read-Host (Get-UiText '  Выбор' '  Choice')).Trim()
                 if ($answer -eq '0') { return '0' }
                 $hit = $Items | Where-Object { $_.Key -eq $answer } | Select-Object -First 1
                 if ($hit) { return $hit.Key }
@@ -438,12 +492,12 @@ function Confirm-Action {
     )
 
     if ($Script:Ctx.AssumeYes) {
-        Write-Info "$Question -> да (режим -Yes)"
+        Write-Info (Get-UiText "$Question -> да (режим -Yes)" "$Question -> yes (-Yes mode)")
         return $true
     }
 
     if ($Script:Ctx.DryRun) {
-        Write-Info "$Question -> пропуск (сухой прогон)"
+        Write-Info (Get-UiText "$Question -> пропуск (сухой прогон)" "$Question -> skipped (dry run)")
         return $false
     }
 
@@ -474,7 +528,7 @@ function Read-Selection {
     #>
     param(
         [Parameter(Mandatory = $true)] [array]$Options,
-        [string]$Title = 'Выберите позиции'
+        [string]$Title = (Get-UiText 'Выберите позиции' 'Select items')
     )
 
     Write-Blank
@@ -483,9 +537,9 @@ function Read-Selection {
     for ($i = 0; $i -lt $Options.Count; $i++) {
         Write-Host ("    " + $Script:C.Muted + ("[{0}]" -f ($i + 1)) + $Script:C.Reset + ' ' + $Script:C.Text + $Options[$i] + $Script:C.Reset)
     }
-    Write-Host ("    " + $Script:C.Muted + "[A]" + $Script:C.Reset + ' ' + $Script:C.Text + 'Все' + $Script:C.Reset)
+    Write-Host ("    " + $Script:C.Muted + "[A]" + $Script:C.Reset + ' ' + $Script:C.Text + (Get-UiText 'Все' 'All') + $Script:C.Reset)
 
-    $raw = Read-Text -Label 'Номера через запятую или A'
+    $raw = Read-Text -Label (Get-UiText 'Номера через запятую или A' 'Comma-separated numbers or A')
     if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
     if ($raw.ToUpper() -eq 'A') { return 0..($Options.Count - 1) }
 
@@ -502,7 +556,7 @@ function Read-Selection {
 
 function Wait-Menu {
     Write-Host ''
-    Write-Host ("  " + $Script:C.Faint + "Enter $($Script:G.Arrow) вернуться в меню" + $Script:C.Reset) -NoNewline
+    Write-Host ("  " + $Script:C.Faint + (Get-UiText "Enter $($Script:G.Arrow) вернуться в меню" "Enter $($Script:G.Arrow) return to menu") + $Script:C.Reset) -NoNewline
     Read-Host | Out-Null
 }
 
@@ -523,12 +577,12 @@ function Invoke-Step {
     try {
         $result = & $Action
         $sw.Stop()
-        if (-not $Quiet) { Write-Ok ("готово за {0:N1}s" -f $sw.Elapsed.TotalSeconds) }
+        if (-not $Quiet) { Write-Ok ((Get-UiText "готово за {0:N1}s" "done in {0:N1}s") -f $sw.Elapsed.TotalSeconds) }
         return $result
     }
     catch {
         $sw.Stop()
-        Write-Fail ("ошибка: " + $_.Exception.Message)
+        Write-Fail ((Get-UiText "ошибка: " "error: ") + $_.Exception.Message)
         Write-Log "  EXCEPTION $($_.Exception.ToString())"
         return $null
     }
@@ -545,12 +599,12 @@ function Test-DryRun {
 }
 
 function Assert-Admin {
-    param([string]$Reason = 'Модуль требует прав администратора.')
+    param([string]$Reason = (Get-UiText 'Модуль требует прав администратора.' 'This module requires administrator privileges.'))
     if ($Script:Ctx.IsAdmin) { return $true }
 
     Write-Blank
     Write-Fail $Reason
-    Write-Info 'Перезапустите PowerShell от имени администратора:'
+    Write-Info (Get-UiText 'Перезапустите PowerShell от имени администратора:' 'Restart PowerShell as administrator:')
     Write-Host ("  " + $Script:C.Faint + "  Start-Process powershell -Verb RunAs" + $Script:C.Reset)
     return $false
 }
@@ -665,31 +719,31 @@ function Get-AcceleratorValue {
 
 function Invoke-ModuleStatus {
     Write-Banner
-    Write-Prompt 'сводка окружения'
+    Write-Prompt (Get-UiText 'сводка окружения' 'environment overview')
     Write-LogHeader 'STATUS'
 
     Write-Blank
-    Write-Bullet 'Система'
+    Write-Bullet (Get-UiText 'Система' 'System')
     try {
         $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
-        Write-Kv 'ОС' "$($os.Caption) ($($os.Version))"
+        Write-Kv (Get-UiText 'ОС' 'OS') "$($os.Caption) ($($os.Version))"
     }
-    catch { Write-Kv 'ОС' 'не определена' $Script:C.Yellow }
-    Write-Kv 'Тип' $(if (Test-IsWindowsServer) { 'Windows Server' } else { 'Клиентская Windows' })
+    catch { Write-Kv (Get-UiText 'ОС' 'OS') (Get-UiText 'не определена' 'unknown') $Script:C.Yellow }
+    Write-Kv (Get-UiText 'Тип' 'Type') $(if (Test-IsWindowsServer) { 'Windows Server' } else { (Get-UiText 'Клиентская Windows' 'Windows client') })
     Write-Kv 'PowerShell' $PSVersionTable.PSVersion.ToString()
-    Write-Kv 'Права' $(if ($Script:Ctx.IsAdmin) { 'администратор' } else { 'обычный пользователь' }) $(if ($Script:Ctx.IsAdmin) { $Script:C.Green } else { $Script:C.Yellow })
-    Write-Kv 'Лог сессии' $(if ($Script:Ctx.LogPath) { $Script:Ctx.LogPath } else { 'не пишется' })
+    Write-Kv (Get-UiText 'Права' 'Privileges') $(if ($Script:Ctx.IsAdmin) { (Get-UiText 'администратор' 'administrator') } else { (Get-UiText 'обычный пользователь' 'standard user') }) $(if ($Script:Ctx.IsAdmin) { $Script:C.Green } else { $Script:C.Yellow })
+    Write-Kv (Get-UiText 'Лог сессии' 'Session log') $(if ($Script:Ctx.LogPath) { $Script:Ctx.LogPath } else { (Get-UiText 'не пишется' 'unavailable') })
 
     Write-Blank
-    Write-Bullet 'Установленные версии Revit'
+    Write-Bullet (Get-UiText 'Установленные версии Revit' 'Installed Revit versions')
     $versions = @(Invoke-Step -Text 'scan registry + program files' -Action { Get-DetectedRevitVersion } -Quiet)
     if ($versions.Count -eq 0) {
-        Write-Info 'не найдено'
+        Write-Info (Get-UiText 'не найдено' 'not found')
     }
     else {
         foreach ($v in $versions) {
             $accel = Get-AcceleratorValue -Version ([int]$v)
-            $accelText = if ([string]::IsNullOrWhiteSpace($accel)) { 'accelerator не задан' } else { "accelerator: $accel" }
+            $accelText = if ([string]::IsNullOrWhiteSpace($accel)) { (Get-UiText 'accelerator не задан' 'accelerator not set') } else { "accelerator: $accel" }
             Write-Kv "Revit $v" $accelText $(if ($accel) { $Script:C.Green } else { $Script:C.Muted })
         }
     }
@@ -698,7 +752,7 @@ function Invoke-ModuleStatus {
     Write-Bullet 'Revit Server'
     $servers = @(Get-RevitServerInstall)
     if ($servers.Count -eq 0) {
-        Write-Info 'не установлен'
+        Write-Info (Get-UiText 'не установлен' 'not installed')
     }
     else {
         foreach ($server in $servers) {
@@ -708,7 +762,7 @@ function Invoke-ModuleStatus {
                 $value = Get-MaxBytesPerRead -ConfigPath $config
                 if ($value) { $values += $value }
             }
-            $valueText = if ($values.Count -eq 0) { 'maxBytesPerRead не найден' } else { 'maxBytesPerRead: ' + (($values | Sort-Object -Unique) -join ' / ') }
+            $valueText = if ($values.Count -eq 0) { (Get-UiText 'maxBytesPerRead не найден' 'maxBytesPerRead not found') } else { 'maxBytesPerRead: ' + (($values | Sort-Object -Unique) -join ' / ') }
             Write-Kv $server.Name $valueText
         }
 
@@ -721,21 +775,21 @@ function Invoke-ModuleStatus {
 
     if (Test-IsWindowsServer) {
         Write-Blank
-        Write-Bullet 'Компоненты IIS для Revit Server'
+        Write-Bullet (Get-UiText 'Компоненты IIS для Revit Server' 'IIS features for Revit Server')
         $required = Get-IisFeatureList
         try {
             Import-Module ServerManager -ErrorAction Stop
             $state = Get-WindowsFeature -Name $required -ErrorAction Stop
             $missing = @($state | Where-Object { $_.InstallState -ne 'Installed' })
             if ($missing.Count -eq 0) {
-                Write-Ok "все $($required.Count) компонентов включены"
+                Write-Ok (Get-UiText "все $($required.Count) компонентов включены" "all $($required.Count) features enabled")
             }
             else {
-                Write-Warn "не включено: $($missing.Count) из $($required.Count)"
+                Write-Warn (Get-UiText "не включено: $($missing.Count) из $($required.Count)" "disabled: $($missing.Count) of $($required.Count)")
                 foreach ($item in $missing) { Write-Kv "  $($item.Name)" $item.InstallState $Script:C.Yellow }
             }
         }
-        catch { Write-Info 'не удалось прочитать состояние ролей' }
+        catch { Write-Info (Get-UiText 'не удалось прочитать состояние ролей' 'could not read feature status') }
     }
 
     Wait-Menu
@@ -765,35 +819,35 @@ function Get-IisFeatureList {
 
 function Invoke-ModuleIis {
     Write-Banner
-    Write-Prompt 'установка IIS и компонентов для Revit Server'
+    Write-Prompt (Get-UiText 'установка IIS и компонентов для Revit Server' 'install IIS and Revit Server features')
     Write-LogHeader 'IIS INSTALL'
 
     if (-not (Test-IsWindowsServer)) {
         Write-Blank
-        Write-Fail 'Это не Windows Server. Модуль использует Install-WindowsFeature и работает только на серверной ОС.'
-        Write-Info 'На клиентской Windows компоненты IIS ставятся через Enable-WindowsOptionalFeature / DISM.'
+        Write-Fail (Get-UiText 'Это не Windows Server. Модуль использует Install-WindowsFeature и работает только на серверной ОС.' 'This is not Windows Server. This module uses Install-WindowsFeature and requires a server OS.')
+        Write-Info (Get-UiText 'На клиентской Windows компоненты IIS ставятся через Enable-WindowsOptionalFeature / DISM.' 'On Windows clients, install IIS features using Enable-WindowsOptionalFeature / DISM.')
         Wait-Menu
         return
     }
 
-    if (-not (Assert-Admin -Reason 'Установка ролей Windows требует прав администратора.')) { Wait-Menu; return }
+    if (-not (Assert-Admin -Reason (Get-UiText 'Установка ролей Windows требует прав администратора.' 'Installing Windows features requires administrator privileges.'))) { Wait-Menu; return }
 
     $features = Get-IisFeatureList
     Import-Module ServerManager -ErrorAction SilentlyContinue
 
     Write-Blank
-    Write-Tool 'reading' 'состояние ролей Windows Server'
+    Write-Tool 'reading' (Get-UiText 'состояние ролей Windows Server' 'Windows Server feature status')
 
     $before = $null
     try { $before = Get-WindowsFeature -Name $features -ErrorAction Stop }
     catch {
-        Write-Fail "не удалось прочитать список ролей: $($_.Exception.Message)"
+        Write-Fail (Get-UiText "не удалось прочитать список ролей: $($_.Exception.Message)" "could not read feature list: $($_.Exception.Message)")
         Wait-Menu
         return
     }
 
     Write-Blank
-    Write-Bullet 'Состояние ДО установки'
+    Write-Bullet (Get-UiText 'Состояние ДО установки' 'Status BEFORE installation')
     Write-Blank
     foreach ($item in $before) {
         $color = if ($item.InstallState -eq 'Installed') { $Script:C.Green } else { $Script:C.Muted }
@@ -804,16 +858,16 @@ function Invoke-ModuleIis {
 
     Write-Blank
     if ($missing.Count -eq 0) {
-        Write-Ok 'все требуемые компоненты уже включены, установка не нужна'
+        Write-Ok (Get-UiText 'все требуемые компоненты уже включены, установка не нужна' 'all required features are already enabled; no installation needed')
         Write-Blank
-        if (Confirm-Action -Question 'Всё равно перезапустить IIS (iisreset)?') {
+        if (Confirm-Action -Question (Get-UiText 'Всё равно перезапустить IIS (iisreset)?' 'Restart IIS anyway (iisreset)?')) {
             Invoke-Step -Text 'iisreset' -Action { iisreset | ForEach-Object { Write-Log "     $_" } } | Out-Null
         }
         Wait-Menu
         return
     }
 
-    Write-Bullet "Будет включено компонентов: $($missing.Count)"
+    Write-Bullet (Get-UiText "Будет включено компонентов: $($missing.Count)" "Features to enable: $($missing.Count)")
     Write-Blank
     foreach ($item in $missing) { Write-Add "$($item.Name)  $($Script:G.Dot)  $($item.DisplayName)" }
 
@@ -823,8 +877,8 @@ function Invoke-ModuleIis {
         return
     }
 
-    if (-not (Confirm-Action -Question 'Запустить установку компонентов?')) {
-        Write-Info 'Отменено.'
+    if (-not (Confirm-Action -Question (Get-UiText 'Запустить установку компонентов?' 'Install the features?'))) {
+        Write-Info (Get-UiText 'Отменено.' 'Cancelled.')
         Wait-Menu
         return
     }
@@ -836,13 +890,13 @@ function Invoke-ModuleIis {
     }
 
     if ($null -eq $result) {
-        Write-Fail 'Установка завершилась с ошибкой. Перезагрузка не выполняется.'
+        Write-Fail (Get-UiText 'Установка завершилась с ошибкой. Перезагрузка не выполняется.' 'Installation failed. No restart will be performed.')
         Wait-Menu
         return
     }
 
     Write-Blank
-    Write-Bullet 'Состояние ПОСЛЕ установки'
+    Write-Bullet (Get-UiText 'Состояние ПОСЛЕ установки' 'Status AFTER installation')
     Write-Blank
     $after = Get-WindowsFeature -Name $features -ErrorAction SilentlyContinue
     $stillMissing = @()
@@ -858,28 +912,28 @@ function Invoke-ModuleIis {
 
     Write-Blank
     if ($stillMissing.Count -gt 0) {
-        Write-Warn "Не включено компонентов: $($stillMissing.Count). Перезагрузка не выполняется автоматически."
+        Write-Warn (Get-UiText "Не включено компонентов: $($stillMissing.Count). Перезагрузка не выполняется автоматически." "Features still disabled: $($stillMissing.Count). No automatic restart.")
         Wait-Menu
         return
     }
 
-    Write-Ok 'Все требуемые компоненты включены'
+    Write-Ok (Get-UiText 'Все требуемые компоненты включены' 'All required features are enabled')
 
     Write-Blank
     Invoke-Step -Text 'iisreset' -Action { iisreset | ForEach-Object { Write-Log "     $_" } } | Out-Null
 
     Write-Blank
     if ($result.RestartNeeded -eq 'Yes' -or $result.RestartNeeded -eq $true) {
-        Write-Warn 'Windows сообщает, что требуется перезагрузка.'
+        Write-Warn (Get-UiText 'Windows сообщает, что требуется перезагрузка.' 'Windows reports that a restart is required.')
     }
 
-    if (Confirm-Action -Question 'Перезагрузить сервер через 60 секунд?' -Danger) {
-        Write-Info 'Отменить можно командой: shutdown /a'
-        shutdown.exe /r /t 60 /c "Revit Toolkit: IIS-компоненты для Revit Server установлены."
-        Write-Ok 'Перезагрузка запланирована'
+    if (Confirm-Action -Question (Get-UiText 'Перезагрузить сервер через 60 секунд?' 'Restart the server in 60 seconds?') -Danger) {
+        Write-Info (Get-UiText 'Отменить можно командой: shutdown /a' 'Cancel with: shutdown /a')
+        shutdown.exe /r /t 60 /c (Get-UiText "Revit Toolkit: IIS-компоненты для Revit Server установлены." "Revit Toolkit: IIS features for Revit Server installed.")
+        Write-Ok (Get-UiText 'Перезагрузка запланирована' 'Restart scheduled')
     }
     else {
-        Write-Info 'Перезагрузите сервер вручную, чтобы компоненты применились.'
+        Write-Info (Get-UiText 'Перезагрузите сервер вручную, чтобы компоненты применились.' 'Restart the server manually to apply the features.')
     }
 
     Wait-Menu
@@ -892,7 +946,7 @@ function Invoke-ModuleIis {
 
 function Invoke-ModuleMaxBytes {
     Write-Banner
-    Write-Prompt 'настройка maxBytesPerRead в Revit Server'
+    Write-Prompt (Get-UiText 'настройка maxBytesPerRead в Revit Server' 'configure Revit Server maxBytesPerRead')
     Write-LogHeader 'MAXBYTESPERREAD'
 
     Write-Blank
@@ -901,13 +955,13 @@ function Invoke-ModuleMaxBytes {
     $servers = @(Get-RevitServerInstall)
     if ($servers.Count -eq 0) {
         Write-Blank
-        Write-Fail 'Revit Server не найден.'
+        Write-Fail (Get-UiText 'Revit Server не найден.' 'Revit Server not found.')
         Wait-Menu
         return
     }
 
     Write-Blank
-    Write-Bullet "Найдено установок: $($servers.Count)"
+    Write-Bullet (Get-UiText "Найдено установок: $($servers.Count)" "Installations found: $($servers.Count)")
     Write-Blank
 
     $labels = @()
@@ -918,44 +972,44 @@ function Invoke-ModuleMaxBytes {
             $value = Get-MaxBytesPerRead -ConfigPath $config
             if ($value) { $values += $value }
         }
-        $valueText = if ($values.Count -eq 0) { 'значение не найдено' } else { (($values | Sort-Object -Unique) -join ' / ') }
+        $valueText = if ($values.Count -eq 0) { (Get-UiText 'значение не найдено' 'value not found') } else { (($values | Sort-Object -Unique) -join ' / ') }
         $labels += ("{0}   [web.config: {1}, maxBytesPerRead: {2}]" -f $server.Name, $configs.Count, $valueText)
     }
 
-    $selected = Read-Selection -Options $labels -Title 'Какие версии обрабатывать'
+    $selected = Read-Selection -Options $labels -Title (Get-UiText 'Какие версии обрабатывать' 'Versions to process')
     if ($selected.Count -eq 0) {
         Write-Blank
-        Write-Info 'Ничего не выбрано.'
+        Write-Info (Get-UiText 'Ничего не выбрано.' 'Nothing selected.')
         Wait-Menu
         return
     }
 
     $modes = @(
-        [pscustomobject]@{ Key = '1'; Title = 'Установить 102400'; Desc = 'Рекомендуется для больших моделей и медленных каналов' },
-        [pscustomobject]@{ Key = '2'; Title = 'Вернуть значение Autodesk 4096'; Desc = 'Откат к стандартной конфигурации' },
-        [pscustomobject]@{ Key = '3'; Title = 'Своё значение'; Desc = 'Ввести число вручную' }
+        [pscustomobject]@{ Key = '1'; Title = (Get-UiText 'Установить 102400' 'Set 102400'); Desc = (Get-UiText 'Рекомендуется для больших моделей и медленных каналов' 'Recommended for large models and slow connections') },
+        [pscustomobject]@{ Key = '2'; Title = (Get-UiText 'Вернуть значение Autodesk 4096' 'Restore Autodesk default: 4096'); Desc = (Get-UiText 'Откат к стандартной конфигурации' 'Restore default configuration') },
+        [pscustomobject]@{ Key = '3'; Title = (Get-UiText 'Своё значение' 'Custom value'); Desc = (Get-UiText 'Ввести число вручную' 'Enter a number manually') }
     )
 
-    $modeKey = Show-Menu -Items $modes -Title 'режим изменения' -BackText 'Отмена'
+    $modeKey = Show-Menu -Items $modes -Title (Get-UiText 'режим изменения' 'change mode') -BackText (Get-UiText 'Отмена' 'Cancel')
     if ($modeKey -eq '0') { return }
 
     $newValue = switch ($modeKey) {
         '1' { '102400' }
         '2' { '4096' }
         '3' {
-            $raw = Read-Text -Label 'Значение maxBytesPerRead' -Hint 'Целое число, например 65536'
+            $raw = Read-Text -Label (Get-UiText 'Значение maxBytesPerRead' 'maxBytesPerRead value') -Hint (Get-UiText 'Целое число, например 65536' 'An integer, e.g. 65536')
             if ($raw -notmatch '^\d+$') { $null } else { $raw }
         }
     }
 
     if (-not $newValue) {
         Write-Blank
-        Write-Fail 'Некорректное значение.'
+        Write-Fail (Get-UiText 'Некорректное значение.' 'Invalid value.')
         Wait-Menu
         return
     }
 
-    if (-not (Assert-Admin -Reason 'Изменение web.config и остановка служб требуют прав администратора.')) { Wait-Menu; return }
+    if (-not (Assert-Admin -Reason (Get-UiText 'Изменение web.config и остановка служб требуют прав администратора.' 'Editing web.config and stopping services require administrator privileges.'))) { Wait-Menu; return }
 
     Write-Banner
     Write-Prompt "maxBytesPerRead $($Script:G.Arrow) $newValue"
@@ -974,19 +1028,19 @@ function Invoke-ModuleMaxBytes {
         }
     }
 
-    Write-Bullet "Файлов к изменению: $($targets.Count)"
+    Write-Bullet (Get-UiText "Файлов к изменению: $($targets.Count)" "Files to change: $($targets.Count)")
     Write-Blank
     foreach ($target in $targets) {
-        $currentText = if ($target.Current) { $target.Current } else { 'нет параметра' }
+        $currentText = if ($target.Current) { $target.Current } else { (Get-UiText 'нет параметра' 'parameter missing') }
         Write-Tool 'reading' $target.Path
         Write-Del "maxBytesPerRead=`"$currentText`""
         Write-Add "maxBytesPerRead=`"$newValue`""
     }
 
     Write-Blank
-    if (Test-DryRun "изменение $($targets.Count) файлов + перезапуск служб Revit Server") { Wait-Menu; return }
-    if (-not (Confirm-Action -Question "Остановить службы Revit Server и изменить $($targets.Count) файлов?" -Danger)) {
-        Write-Info 'Отменено.'
+    if (Test-DryRun (Get-UiText "изменение $($targets.Count) файлов + перезапуск служб Revit Server" "change $($targets.Count) files + restart Revit Server services")) { Wait-Menu; return }
+    if (-not (Confirm-Action -Question (Get-UiText "Остановить службы Revit Server и изменить $($targets.Count) файлов?" "Stop Revit Server services and change $($targets.Count) files?") -Danger)) {
+        Write-Info (Get-UiText 'Отменено.' 'Cancelled.')
         Wait-Menu
         return
     }
@@ -1020,7 +1074,7 @@ function Invoke-ModuleMaxBytes {
                 Write-Ok "$($target.Server)  $($Script:G.Dot)  $(Split-Path $target.Path -Leaf)  $($Script:G.Dot)  backup: .bak"
             }
             else {
-                Write-Warn "параметр не найден: $($target.Path)"
+                Write-Warn (Get-UiText "параметр не найден: $($target.Path)" "parameter not found: $($target.Path)")
             }
         }
         catch {
@@ -1041,9 +1095,9 @@ function Invoke-ModuleMaxBytes {
     } | Out-Null
 
     Write-Blank
-    Write-Bullet "Изменено файлов: $changed, ошибок: $failed"
+    Write-Bullet (Get-UiText "Изменено файлов: $changed, ошибок: $failed" "Files changed: $changed, errors: $failed")
     if ($changed -gt 0) {
-        Write-Info 'Резервные копии лежат рядом с web.config с расширением .bak'
+        Write-Info (Get-UiText 'Резервные копии лежат рядом с web.config с расширением .bak' 'Backups are next to web.config with the .bak extension')
     }
 
     Wait-Menu
@@ -1090,12 +1144,12 @@ function Test-AcceleratorAddress {
 
 function Show-AcceleratorTable {
     Write-Blank
-    Write-Bullet 'Текущие значения RSACCELERATOR'
+    Write-Bullet (Get-UiText 'Текущие значения RSACCELERATOR' 'Current RSACCELERATOR values')
     Write-Blank
     foreach ($version in $Script:AcceleratorVersions) {
         $value = Get-AcceleratorValue -Version $version
         if ([string]::IsNullOrWhiteSpace($value)) {
-            Write-Kv "RSACCELERATOR$version" 'не задано' $Script:C.Faint
+            Write-Kv "RSACCELERATOR$version" (Get-UiText 'не задано' 'not set') $Script:C.Faint
         }
         else {
             Write-Kv "RSACCELERATOR$version" $value $Script:C.Green
@@ -1107,11 +1161,11 @@ function Select-RevitVersionForAccelerator {
     $options = @()
     foreach ($version in $Script:AcceleratorVersions) {
         $value = Get-AcceleratorValue -Version $version
-        $status = if ([string]::IsNullOrWhiteSpace($value)) { 'не задано' } else { $value }
+        $status = if ([string]::IsNullOrWhiteSpace($value)) { (Get-UiText 'не задано' 'not set') } else { $value }
         $options += ("Revit {0}   [{1}]" -f $version, $status)
     }
 
-    $selected = Read-Selection -Options $options -Title 'Выберите версии Revit'
+    $selected = Read-Selection -Options $options -Title (Get-UiText 'Выберите версии Revit' 'Select Revit versions')
     $result = @()
     foreach ($idx in $selected) { $result += [int]$Script:AcceleratorVersions[$idx] }
     return $result
@@ -1119,23 +1173,23 @@ function Select-RevitVersionForAccelerator {
 
 function Read-AcceleratorAddress {
     while ($true) {
-        $address = Read-Text -Label 'Адрес акселератора' -Hint 'Например: 192.168.88.21 или revit-accel.company.local'
+        $address = Read-Text -Label (Get-UiText 'Адрес акселератора' 'Accelerator address') -Hint (Get-UiText 'Например: 192.168.88.21 или revit-accel.company.local' 'Example: 192.168.88.21 or revit-accel.company.local')
         if (Test-AcceleratorAddress -Address $address) { return $address }
-        Write-Fail 'Адрес пустой или содержит недопустимые символы.'
+        Write-Fail (Get-UiText 'Адрес пустой или содержит недопустимые символы.' 'Address is empty or contains invalid characters.')
     }
 }
 
 function Invoke-ModuleAccelerator {
     while ($true) {
         $items = @(
-            [pscustomobject]@{ Key = '1'; Title = 'Задать акселератор для выбранных версий'; Desc = 'Записывает RSACCELERATOR<год> в переменные пользователя' },
-            [pscustomobject]@{ Key = '2'; Title = 'Задать акселератор для всех версий'; Desc = "Revit $($Script:AcceleratorVersions[0])-$($Script:AcceleratorVersions[-1])" },
-            [pscustomobject]@{ Key = '3'; Title = 'Отключить акселератор для выбранных версий'; Desc = 'Удаляет переменные окружения' },
-            [pscustomobject]@{ Key = '4'; Title = 'Отключить акселератор для всех версий'; Desc = 'Полный сброс' },
-            [pscustomobject]@{ Key = '5'; Title = 'Показать текущие значения'; Desc = 'Таблица по всем годам' }
+            [pscustomobject]@{ Key = '1'; Title = (Get-UiText 'Задать акселератор для выбранных версий' 'Set accelerator for selected versions'); Desc = (Get-UiText 'Записывает RSACCELERATOR<год> в переменные пользователя' 'Sets RSACCELERATOR<year> in user environment variables') },
+            [pscustomobject]@{ Key = '2'; Title = (Get-UiText 'Задать акселератор для всех версий' 'Set accelerator for all versions'); Desc = "Revit $($Script:AcceleratorVersions[0])-$($Script:AcceleratorVersions[-1])" },
+            [pscustomobject]@{ Key = '3'; Title = (Get-UiText 'Отключить акселератор для выбранных версий' 'Disable accelerator for selected versions'); Desc = (Get-UiText 'Удаляет переменные окружения' 'Removes environment variables') },
+            [pscustomobject]@{ Key = '4'; Title = (Get-UiText 'Отключить акселератор для всех версий' 'Disable accelerator for all versions'); Desc = (Get-UiText 'Полный сброс' 'Full reset') },
+            [pscustomobject]@{ Key = '5'; Title = (Get-UiText 'Показать текущие значения' 'Show current values'); Desc = (Get-UiText 'Таблица по всем годам' 'Table for all years') }
         )
 
-        $choice = Show-Menu -Items $items -Title 'менеджер Revit Server Accelerator' -BackText 'Назад'
+        $choice = Show-Menu -Items $items -Title (Get-UiText 'менеджер Revit Server Accelerator' 'Revit Server Accelerator manager') -BackText (Get-UiText 'Назад' 'Back')
         if ($choice -eq '0') { return }
 
         Write-Banner
@@ -1143,83 +1197,83 @@ function Invoke-ModuleAccelerator {
 
         switch ($choice) {
             '1' {
-                Write-Prompt 'акселератор для выбранных версий'
+                Write-Prompt (Get-UiText 'акселератор для выбранных версий' 'accelerator for selected versions')
                 $versions = Select-RevitVersionForAccelerator
-                if ($versions.Count -eq 0) { Write-Blank; Write-Info 'Ничего не выбрано.'; Wait-Menu; break }
+                if ($versions.Count -eq 0) { Write-Blank; Write-Info (Get-UiText 'Ничего не выбрано.' 'Nothing selected.'); Wait-Menu; break }
 
                 $address = Read-AcceleratorAddress
                 Write-Blank
                 foreach ($version in $versions) { Write-Add "RSACCELERATOR$version = $address" }
 
                 Write-Blank
-                if (Test-DryRun "запись $($versions.Count) переменных окружения") { Wait-Menu; break }
-                if (-not (Confirm-Action -Question "Записать адрес для версий: $($versions -join ', ')?")) { Write-Info 'Отменено.'; Wait-Menu; break }
+                if (Test-DryRun (Get-UiText "запись $($versions.Count) переменных окружения" "setting $($versions.Count) environment variables")) { Wait-Menu; break }
+                if (-not (Confirm-Action -Question (Get-UiText "Записать адрес для версий: $($versions -join ', ')?" "Set address for versions: $($versions -join ', ')?"))) { Write-Info (Get-UiText 'Отменено.' 'Cancelled.'); Wait-Menu; break }
 
                 foreach ($version in $versions) { Set-AcceleratorValue -Version $version -Address $address }
                 Update-EnvironmentBroadcast | Out-Null
 
                 Write-Blank
-                Write-Ok "Готово. Перезапустите Revit, чтобы настройка применилась."
+                Write-Ok (Get-UiText "Готово. Перезапустите Revit, чтобы настройка применилась." "Done. Restart Revit to apply the setting.")
                 Wait-Menu
             }
 
             '2' {
-                Write-Prompt 'акселератор для всех версий'
+                Write-Prompt (Get-UiText 'акселератор для всех версий' 'accelerator for all versions')
                 $address = Read-AcceleratorAddress
                 Write-Blank
                 foreach ($version in $Script:AcceleratorVersions) { Write-Add "RSACCELERATOR$version = $address" }
 
                 Write-Blank
-                if (Test-DryRun 'запись переменных для всех версий') { Wait-Menu; break }
-                if (-not (Confirm-Action -Question "Задать '$address' для всех версий?")) { Write-Info 'Отменено.'; Wait-Menu; break }
+                if (Test-DryRun (Get-UiText 'запись переменных для всех версий' 'setting variables for all versions')) { Wait-Menu; break }
+                if (-not (Confirm-Action -Question (Get-UiText "Задать '$address' для всех версий?" "Set '$address' for all versions?"))) { Write-Info (Get-UiText 'Отменено.' 'Cancelled.'); Wait-Menu; break }
 
                 foreach ($version in $Script:AcceleratorVersions) { Set-AcceleratorValue -Version $version -Address $address }
                 Update-EnvironmentBroadcast | Out-Null
 
                 Write-Blank
-                Write-Ok 'Готово. Перезапустите Revit.'
+                Write-Ok (Get-UiText 'Готово. Перезапустите Revit.' 'Done. Restart Revit.')
                 Wait-Menu
             }
 
             '3' {
-                Write-Prompt 'отключение акселератора'
+                Write-Prompt (Get-UiText 'отключение акселератора' 'disable accelerator')
                 $versions = Select-RevitVersionForAccelerator
-                if ($versions.Count -eq 0) { Write-Blank; Write-Info 'Ничего не выбрано.'; Wait-Menu; break }
+                if ($versions.Count -eq 0) { Write-Blank; Write-Info (Get-UiText 'Ничего не выбрано.' 'Nothing selected.'); Wait-Menu; break }
 
                 Write-Blank
                 foreach ($version in $versions) { Write-Del "RSACCELERATOR$version" }
 
                 Write-Blank
-                if (Test-DryRun "удаление $($versions.Count) переменных") { Wait-Menu; break }
-                if (-not (Confirm-Action -Question "Удалить переменные для версий: $($versions -join ', ')?")) { Write-Info 'Отменено.'; Wait-Menu; break }
+                if (Test-DryRun (Get-UiText "удаление $($versions.Count) переменных" "remove $($versions.Count) variables")) { Wait-Menu; break }
+                if (-not (Confirm-Action -Question (Get-UiText "Удалить переменные для версий: $($versions -join ', ')?" "Remove variables for versions: $($versions -join ', ')?"))) { Write-Info (Get-UiText 'Отменено.' 'Cancelled.'); Wait-Menu; break }
 
                 foreach ($version in $versions) { Remove-AcceleratorValue -Version $version }
                 Update-EnvironmentBroadcast | Out-Null
 
                 Write-Blank
-                Write-Ok 'Готово.'
+                Write-Ok (Get-UiText 'Готово.' 'Done.')
                 Wait-Menu
             }
 
             '4' {
-                Write-Prompt 'отключение акселератора для всех версий'
+                Write-Prompt (Get-UiText 'отключение акселератора для всех версий' 'disable accelerator for all versions')
                 Write-Blank
                 foreach ($version in $Script:AcceleratorVersions) { Write-Del "RSACCELERATOR$version" }
 
                 Write-Blank
-                if (Test-DryRun 'удаление всех переменных RSACCELERATOR') { Wait-Menu; break }
-                if (-not (Confirm-Action -Question 'Удалить RSACCELERATOR для всех версий?' -Danger)) { Write-Info 'Отменено.'; Wait-Menu; break }
+                if (Test-DryRun (Get-UiText 'удаление всех переменных RSACCELERATOR' 'remove all RSACCELERATOR variables')) { Wait-Menu; break }
+                if (-not (Confirm-Action -Question (Get-UiText 'Удалить RSACCELERATOR для всех версий?' 'Remove RSACCELERATOR for all versions?') -Danger)) { Write-Info (Get-UiText 'Отменено.' 'Cancelled.'); Wait-Menu; break }
 
                 foreach ($version in $Script:AcceleratorVersions) { Remove-AcceleratorValue -Version $version }
                 Update-EnvironmentBroadcast | Out-Null
 
                 Write-Blank
-                Write-Ok 'Готово.'
+                Write-Ok (Get-UiText 'Готово.' 'Done.')
                 Wait-Menu
             }
 
             '5' {
-                Write-Prompt 'текущие значения'
+                Write-Prompt (Get-UiText 'текущие значения' 'current values')
                 Show-AcceleratorTable
                 Wait-Menu
             }
@@ -1432,16 +1486,16 @@ function Get-RevitCleanupPlan {
     $items = New-Object System.Collections.Generic.List[object]
 
     foreach ($path in @(Resolve-RevitUserPath $Version | Where-Object { Test-Path -LiteralPath $_ })) {
-        $items.Add([pscustomobject]@{ Type = 'Файлы'; Path = $path })
+        $items.Add([pscustomobject]@{ Type = (Get-UiText 'Файлы' 'Files'); Path = $path })
     }
     foreach ($path in @(Resolve-RevitDeepFilePath $Version)) {
-        $items.Add([pscustomobject]@{ Type = 'Кэш/остатки'; Path = $path })
+        $items.Add([pscustomobject]@{ Type = (Get-UiText 'Кэш/остатки' 'Cache / leftovers'); Path = $path })
     }
     foreach ($path in @(Resolve-RevitRegistryPath $Version)) {
-        $items.Add([pscustomobject]@{ Type = 'Реестр'; Path = $path })
+        $items.Add([pscustomobject]@{ Type = (Get-UiText 'Реестр' 'registry'); Path = $path })
     }
     foreach ($path in @(Resolve-RevitDeepRegistryPath $Version)) {
-        $items.Add([pscustomobject]@{ Type = 'Реестр (глубоко)'; Path = $path })
+        $items.Add([pscustomobject]@{ Type = (Get-UiText 'Реестр (глубоко)' 'Registry (deep scan)'); Path = $path })
     }
 
     return @($items | Sort-Object Type, Path -Unique)
@@ -1454,7 +1508,7 @@ function Remove-CleanupItem {
             Remove-Item -LiteralPath $Item.Path -Recurse -Force -ErrorAction Stop
         }
         if (Test-Path -LiteralPath $Item.Path) {
-            return [pscustomobject]@{ Ok = $false; Message = "осталось после удаления: $($Item.Path)" }
+            return [pscustomobject]@{ Ok = $false; Message = (Get-UiText "осталось после удаления: $($Item.Path)" "still present after removal: $($Item.Path)") }
         }
         return [pscustomobject]@{ Ok = $true; Message = $Item.Path }
     }
@@ -1474,7 +1528,7 @@ function Get-AdskLicensingVersionText {
             if ($info -and $info.VersionInfo.FileVersion) { return $info.VersionInfo.FileVersion }
         }
     }
-    return 'не найдено'
+    return (Get-UiText 'не найдено' 'not found')
 }
 
 function Get-AdskLicensingInstaller {
@@ -1487,30 +1541,30 @@ function Get-AdskLicensingInstaller {
 
 function Invoke-AdskLicensingUpdate {
     Write-Banner
-    Write-Prompt 'обновление Autodesk Licensing Service'
+    Write-Prompt (Get-UiText 'обновление Autodesk Licensing Service' 'update Autodesk Licensing Service')
     Write-LogHeader 'ADSK LICENSING'
 
-    if (-not (Assert-Admin -Reason 'Переустановка службы лицензирования требует прав администратора.')) { Wait-Menu; return }
+    if (-not (Assert-Admin -Reason (Get-UiText 'Переустановка службы лицензирования требует прав администратора.' 'Reinstalling the licensing service requires administrator privileges.'))) { Wait-Menu; return }
 
     $installers = @(Get-AdskLicensingInstaller)
     Write-Blank
-    Write-Kv 'Текущая версия' (Get-AdskLicensingVersionText)
+    Write-Kv (Get-UiText 'Текущая версия' 'Current version') (Get-AdskLicensingVersionText)
 
     if ($installers.Count -eq 0) {
         Write-Blank
-        Write-Fail 'Установщик не найден.'
-        Write-Info "Положите файл вида 'AdskLicensing-installer 11.x.x.x.exe' рядом со скриптом:"
+        Write-Fail (Get-UiText 'Установщик не найден.' 'Installer not found.')
+        Write-Info (Get-UiText "Положите файл вида 'AdskLicensing-installer 11.x.x.x.exe' рядом со скриптом:" "Place a file named 'AdskLicensing-installer 11.x.x.x.exe' next to the script:")
         Write-Info $Script:Root
         Wait-Menu
         return
     }
 
     $installer = $installers[0]
-    Write-Kv 'Установщик' $installer.Name
+    Write-Kv (Get-UiText 'Установщик' 'Installer') $installer.Name
 
     Write-Blank
-    if (Test-DryRun 'остановка службы, удаление старой версии, установка новой') { Wait-Menu; return }
-    if (-not (Confirm-Action -Question 'Переустановить AdskLicensing?' -Danger)) { Write-Info 'Отменено.'; Wait-Menu; return }
+    if (Test-DryRun (Get-UiText 'остановка службы, удаление старой версии, установка новой' 'stop service, remove old version, install new version')) { Wait-Menu; return }
+    if (-not (Confirm-Action -Question (Get-UiText 'Переустановить AdskLicensing?' 'Reinstall AdskLicensing?') -Danger)) { Write-Info (Get-UiText 'Отменено.' 'Cancelled.'); Wait-Menu; return }
 
     Write-Blank
     Invoke-Step -Text 'stop AdskLicensingService' -Action {
@@ -1541,47 +1595,47 @@ function Invoke-AdskLicensingUpdate {
     } | Out-Null
 
     Write-Blank
-    Write-Ok "Новая версия: $(Get-AdskLicensingVersionText)"
+    Write-Ok (Get-UiText "Новая версия: $(Get-AdskLicensingVersionText)" "New version: $(Get-AdskLicensingVersionText)")
     Wait-Menu
 }
 
 function Invoke-RevitCleanup {
     Write-Banner
-    Write-Prompt 'очистка следов Revit'
+    Write-Prompt (Get-UiText 'очистка следов Revit' 'clean up Revit remnants')
     Write-LogHeader 'CLEAN REVIT'
 
-    if (-not (Assert-Admin -Reason 'Удаление файлов в Program Files и веток реестра HKLM требует прав администратора.')) { Wait-Menu; return }
+    if (-not (Assert-Admin -Reason (Get-UiText 'Удаление файлов в Program Files и веток реестра HKLM требует прав администратора.' 'Deleting Program Files entries and HKLM registry keys requires administrator privileges.'))) { Wait-Menu; return }
 
     Write-Blank
-    Write-Tool 'reading' 'реестр + Program Files + профили пользователей'
+    Write-Tool 'reading' (Get-UiText 'реестр + Program Files + профили пользователей' 'registry + Program Files + user profiles')
     $versions = @(Get-DetectedRevitVersion)
 
     $version = $null
     if ($versions.Count -gt 0) {
         $options = @()
         foreach ($v in $versions) { $options += "Revit $v" }
-        $options += 'Ввести версию вручную'
+        $options += (Get-UiText 'Ввести версию вручную' 'Enter version manually')
 
-        $selected = Read-Selection -Options $options -Title 'Версия для очистки (выберите одну)'
-        if ($selected.Count -eq 0) { Write-Blank; Write-Info 'Отменено.'; Wait-Menu; return }
+        $selected = Read-Selection -Options $options -Title (Get-UiText 'Версия для очистки (выберите одну)' 'Version to clean (select one)')
+        if ($selected.Count -eq 0) { Write-Blank; Write-Info (Get-UiText 'Отменено.' 'Cancelled.'); Wait-Menu; return }
 
         $idx = $selected[0]
         if ($idx -lt $versions.Count) { $version = $versions[$idx] }
     }
 
     if (-not $version) {
-        $version = Read-Text -Label 'Версия Revit' -Hint 'Четыре цифры, например 2022'
+        $version = Read-Text -Label (Get-UiText 'Версия Revit' 'Revit version') -Hint (Get-UiText 'Четыре цифры, например 2022' 'Four digits, e.g. 2022')
     }
 
     if ($version -notmatch '^20\d{2}$') {
         Write-Blank
-        Write-Fail 'Неверный формат версии.'
+        Write-Fail (Get-UiText 'Неверный формат версии.' 'Invalid version format.')
         Wait-Menu
         return
     }
 
     Write-Banner
-    Write-Prompt "поиск следов Revit $version"
+    Write-Prompt (Get-UiText "поиск следов Revit $version" "search for Revit $version remnants")
     Write-Blank
 
     $plan = Invoke-Step -Text "scan filesystem + registry (Revit $version)" -Action { Get-RevitCleanupPlan $version }
@@ -1589,12 +1643,12 @@ function Invoke-RevitCleanup {
 
     Write-Blank
     if ($plan.Count -eq 0) {
-        Write-Ok "Следы Revit $version не найдены."
+        Write-Ok (Get-UiText "Следы Revit $version не найдены." "No Revit $version remnants found.")
         Wait-Menu
         return
     }
 
-    Write-Bullet "Найдено объектов: $($plan.Count)"
+    Write-Bullet (Get-UiText "Найдено объектов: $($plan.Count)" "Entries found: $($plan.Count)")
     Write-Blank
 
     $groups = $plan | Group-Object Type
@@ -1607,11 +1661,11 @@ function Invoke-RevitCleanup {
         Write-Blank
     }
 
-    if (Test-DryRun "удаление $($plan.Count) объектов (файлы и ветки реестра)") { Wait-Menu; return }
+    if (Test-DryRun (Get-UiText "удаление $($plan.Count) объектов (файлы и ветки реестра)" "remove $($plan.Count) entries (files and registry keys)")) { Wait-Menu; return }
 
-    Write-Warn 'Операция необратима. Рекомендуется закрыть Revit и сделать точку восстановления.'
-    if (-not (Confirm-Action -Question "Удалить все $($plan.Count) объектов для Revit $version?" -Danger)) {
-        Write-Info 'Отменено.'
+    Write-Warn (Get-UiText 'Операция необратима. Рекомендуется закрыть Revit и сделать точку восстановления.' 'This operation cannot be undone. Close Revit and create a restore point first.')
+    if (-not (Confirm-Action -Question (Get-UiText "Удалить все $($plan.Count) объектов для Revit $version?" "Delete all $($plan.Count) entries for Revit $version?") -Danger)) {
+        Write-Info (Get-UiText 'Отменено.' 'Cancelled.')
         Wait-Menu
         return
     }
@@ -1624,20 +1678,20 @@ function Invoke-RevitCleanup {
 
     foreach ($item in $plan) {
         $i++
-        Write-Bar -Current $i -Total $total -Text "удаление $i / $total"
+        Write-Bar -Current $i -Total $total -Text (Get-UiText "удаление $i / $total" "remove $i / $total")
         $result = Remove-CleanupItem -Item $item
         if ($result.Ok) { $removed++; Write-Log "  DELETED $($item.Type) | $($item.Path)" }
         else { $errors++; Write-Log "  ERROR $($result.Message)" }
     }
 
     Write-Blank
-    Write-Bullet "Удалено: $removed   Ошибок: $errors"
+    Write-Bullet (Get-UiText "Удалено: $removed   Ошибок: $errors" "Removed: $removed   Errors: $errors")
     if ($errors -gt 0) {
-        Write-Info "Подробности в логе: $($Script:Ctx.LogPath)"
-        Write-Info 'Часть объектов может быть занята процессами Revit или защищена системой.'
+        Write-Info (Get-UiText "Подробности в логе: $($Script:Ctx.LogPath)" "Details in log: $($Script:Ctx.LogPath)")
+        Write-Info (Get-UiText 'Часть объектов может быть занята процессами Revit или защищена системой.' 'Some entries may be in use by Revit or protected by the system.')
     }
     Write-Blank
-    Write-Warn 'Перед новой установкой Revit перезагрузите Windows.'
+    Write-Warn (Get-UiText 'Перед новой установкой Revit перезагрузите Windows.' 'Restart Windows before reinstalling Revit.')
 
     Wait-Menu
 }
@@ -1645,11 +1699,11 @@ function Invoke-RevitCleanup {
 function Invoke-ModuleClean {
     while ($true) {
         $items = @(
-            [pscustomobject]@{ Key = '1'; Title = 'Поиск и удаление следов Revit'; Desc = 'Файлы, кэш ODIS/UPI2, ветки реестра, записи установщика' },
-            [pscustomobject]@{ Key = '2'; Title = 'Обновить Autodesk Licensing Service'; Desc = 'Требуется AdskLicensing-installer *.exe рядом со скриптом' }
+            [pscustomobject]@{ Key = '1'; Title = (Get-UiText 'Поиск и удаление следов Revit' 'Find and remove Revit remnants'); Desc = (Get-UiText 'Файлы, кэш ODIS/UPI2, ветки реестра, записи установщика' 'Files, ODIS/UPI2 cache, registry keys, installer entries') },
+            [pscustomobject]@{ Key = '2'; Title = (Get-UiText 'Обновить Autodesk Licensing Service' 'Update Autodesk Licensing Service'); Desc = (Get-UiText 'Требуется AdskLicensing-installer *.exe рядом со скриптом' 'Requires AdskLicensing-installer *.exe next to the script') }
         )
 
-        $choice = Show-Menu -Items $items -Title 'очистка Revit' -BackText 'Назад'
+        $choice = Show-Menu -Items $items -Title (Get-UiText 'очистка Revit' 'Revit cleanup') -BackText (Get-UiText 'Назад' 'Back')
         switch ($choice) {
             '0' { return }
             '1' { Invoke-RevitCleanup }
@@ -1704,10 +1758,10 @@ function Find-RevitJournal {
 
 function Format-Size {
     param([long]$Bytes)
-    if ($Bytes -gt 1GB) { return ("{0:N2} ГБ" -f ($Bytes / 1GB)) }
-    if ($Bytes -gt 1MB) { return ("{0:N1} МБ" -f ($Bytes / 1MB)) }
-    if ($Bytes -gt 1KB) { return ("{0:N0} КБ" -f ($Bytes / 1KB)) }
-    return "$Bytes Б"
+    if ($Bytes -gt 1GB) { return ((Get-UiText "{0:N2} ГБ" "{0:N2} GB") -f ($Bytes / 1GB)) }
+    if ($Bytes -gt 1MB) { return ((Get-UiText "{0:N1} МБ" "{0:N1} MB") -f ($Bytes / 1MB)) }
+    if ($Bytes -gt 1KB) { return ((Get-UiText "{0:N0} КБ" "{0:N0} KB") -f ($Bytes / 1KB)) }
+    return (Get-UiText "$Bytes Б" "$Bytes B")
 }
 
 function Get-FolderSize {
@@ -1723,20 +1777,20 @@ function Get-FolderSize {
 
 function Invoke-ModuleBackups {
     Write-Banner
-    Write-Prompt 'backup-папки и журналы Revit'
+    Write-Prompt (Get-UiText 'backup-папки и журналы Revit' 'Revit backup folders and journals')
     Write-LogHeader 'BACKUPS AND JOURNALS'
 
     $documents = [Environment]::GetFolderPath('MyDocuments')
 
     Write-Blank
-    Write-Kv 'Область поиска backup' $documents
-    Write-Kv 'Журналы' (Join-Path $env:LOCALAPPDATA 'Autodesk\Revit')
-    Write-Kv 'Политика журналов' 'старше 7 дней, последние 5 всегда сохраняются'
+    Write-Kv (Get-UiText 'Область поиска backup' 'Backup search folder') $documents
+    Write-Kv (Get-UiText 'Журналы' 'Journals') (Join-Path $env:LOCALAPPDATA 'Autodesk\Revit')
+    Write-Kv (Get-UiText 'Политика журналов' 'Journal retention policy') (Get-UiText 'старше 7 дней, последние 5 всегда сохраняются' 'older than 7 days; the latest 5 are always kept')
 
-    $customRoot = Read-Text -Label 'Другая папка для поиска backup (Enter = по умолчанию)'
+    $customRoot = Read-Text -Label (Get-UiText 'Другая папка для поиска backup (Enter = по умолчанию)' 'Custom backup search folder (Enter = default)')
     if (-not [string]::IsNullOrWhiteSpace($customRoot)) {
         if (Test-Path -LiteralPath $customRoot) { $documents = $customRoot }
-        else { Write-Fail 'Путь не найден, используется папка по умолчанию.' }
+        else { Write-Fail (Get-UiText 'Путь не найден, используется папка по умолчанию.' 'Path not found; using the default folder.') }
     }
 
     Write-Blank
@@ -1766,30 +1820,30 @@ function Invoke-ModuleBackups {
     if ($null -eq $journalSize) { $journalSize = 0 }
 
     Write-Blank
-    Write-Bullet 'Результат поиска'
+    Write-Bullet (Get-UiText 'Результат поиска' 'Search results')
     Write-Blank
-    Write-Kv 'Backup-папок найдено' ([string]$backups.Count)
-    Write-Kv 'Из них с живым .rvt' ("$($safeBackups.Count)   $(Format-Size $backupSize)") $Script:C.Green
-    Write-Kv 'Без парного .rvt' ("$($orphanBackups.Count)   (пропускаются)") $Script:C.Yellow
-    Write-Kv 'Журналов к удалению' ("$($journals.Count)   $(Format-Size $journalSize)")
+    Write-Kv (Get-UiText 'Backup-папок найдено' 'Backup folders found') ([string]$backups.Count)
+    Write-Kv (Get-UiText 'Из них с живым .rvt' 'With an existing .rvt') ("$($safeBackups.Count)   $(Format-Size $backupSize)") $Script:C.Green
+    Write-Kv (Get-UiText 'Без парного .rvt' 'Without a matching .rvt') ((Get-UiText "$($orphanBackups.Count)   (пропускаются)" "$($orphanBackups.Count)   (skipped)")) $Script:C.Yellow
+    Write-Kv (Get-UiText 'Журналов к удалению' 'Journals to delete') ("$($journals.Count)   $(Format-Size $journalSize)")
 
     if ($safeBackups.Count -gt 0) {
         Write-Blank
-        Write-Host ("  " + $Script:C.Cyan + 'Backup-папки к удалению' + $Script:C.Reset)
+        Write-Host ("  " + $Script:C.Cyan + (Get-UiText 'Backup-папки к удалению' 'Backup folders to delete') + $Script:C.Reset)
         foreach ($entry in ($safeBackups | Select-Object -First 40)) {
             Write-Host ("    " + $Script:C.Faint + "$($entry.Path)   [$(Format-Size $entry.Size)]" + $Script:C.Reset)
             Write-Log "     BACKUP $($entry.Path) -> $($entry.Related)"
         }
-        if ($safeBackups.Count -gt 40) { Write-Info "... и ещё $($safeBackups.Count - 40)" }
+        if ($safeBackups.Count -gt 40) { Write-Info (Get-UiText "... и ещё $($safeBackups.Count - 40)" "... and $($safeBackups.Count - 40) more") }
     }
 
     if ($orphanBackups.Count -gt 0) {
         Write-Blank
-        Write-Host ("  " + $Script:C.Yellow + 'Пропущено: не найден парный .rvt' + $Script:C.Reset)
+        Write-Host ("  " + $Script:C.Yellow + (Get-UiText 'Пропущено: не найден парный .rvt' 'Skipped: no matching .rvt found') + $Script:C.Reset)
         foreach ($entry in ($orphanBackups | Select-Object -First 20)) {
             Write-Host ("    " + $Script:C.Faint + $entry.Path + $Script:C.Reset)
         }
-        if ($orphanBackups.Count -gt 20) { Write-Info "... и ещё $($orphanBackups.Count - 20)" }
+        if ($orphanBackups.Count -gt 20) { Write-Info (Get-UiText "... и ещё $($orphanBackups.Count - 20)" "... and $($orphanBackups.Count - 20) more") }
     }
 
     # Отчёт CSV
@@ -1802,30 +1856,30 @@ function Invoke-ModuleBackups {
 
     if ($safeBackups.Count -eq 0 -and $journals.Count -eq 0) {
         Write-Blank
-        Write-Ok 'Удалять нечего.'
+        Write-Ok (Get-UiText 'Удалять нечего.' 'Nothing to delete.')
         Wait-Menu
         return
     }
 
     Write-Blank
     $freed = Format-Size ($backupSize + $journalSize)
-    if (Test-DryRun "удаление $($safeBackups.Count) backup-папок и $($journals.Count) журналов, освободится $freed") {
+    if (Test-DryRun (Get-UiText "удаление $($safeBackups.Count) backup-папок и $($journals.Count) журналов, освободится $freed" "remove $($safeBackups.Count) backup folders and $($journals.Count) journals, free $freed")) {
         try {
             $report | Export-Csv -LiteralPath $reportPath -NoTypeInformation -Encoding UTF8
-            Write-Ok "Отчёт: $reportPath"
+            Write-Ok (Get-UiText "Отчёт: $reportPath" "Report: $reportPath")
         }
-        catch { Write-Fail "не удалось сохранить отчёт: $($_.Exception.Message)" }
+        catch { Write-Fail (Get-UiText "не удалось сохранить отчёт: $($_.Exception.Message)" "could not save report: $($_.Exception.Message)") }
         Wait-Menu
         return
     }
 
-    if (-not (Confirm-Action -Question "Удалить $($safeBackups.Count) backup-папок и $($journals.Count) журналов (освободится $freed)?" -Danger)) {
-        Write-Info 'Отменено. Сохраняю только отчёт.'
+    if (-not (Confirm-Action -Question (Get-UiText "Удалить $($safeBackups.Count) backup-папок и $($journals.Count) журналов (освободится $freed)?" "Delete $($safeBackups.Count) backup folders and $($journals.Count) journals (free $freed)?") -Danger)) {
+        Write-Info (Get-UiText 'Отменено. Сохраняю только отчёт.' 'Cancelled. Saving the report only.')
         try {
             $report | Export-Csv -LiteralPath $reportPath -NoTypeInformation -Encoding UTF8
-            Write-Ok "Отчёт: $reportPath"
+            Write-Ok (Get-UiText "Отчёт: $reportPath" "Report: $reportPath")
         }
-        catch { Write-Fail "не удалось сохранить отчёт: $($_.Exception.Message)" }
+        catch { Write-Fail (Get-UiText "не удалось сохранить отчёт: $($_.Exception.Message)" "could not save report: $($_.Exception.Message)") }
         Wait-Menu
         return
     }
@@ -1838,7 +1892,7 @@ function Invoke-ModuleBackups {
 
     foreach ($entry in $safeBackups) {
         $i++
-        Write-Bar -Current $i -Total $total -Text 'backup-папки'
+        Write-Bar -Current $i -Total $total -Text (Get-UiText 'backup-папки' 'backup folders')
         try {
             Remove-Item -LiteralPath $entry.Path -Recurse -Force -ErrorAction Stop
             $deletedBackups++
@@ -1857,7 +1911,7 @@ function Invoke-ModuleBackups {
 
     foreach ($journal in $journals) {
         $i++
-        Write-Bar -Current $i -Total $total -Text 'журналы'
+        Write-Bar -Current $i -Total $total -Text (Get-UiText 'журналы' 'Journals')
         try {
             Remove-Item -LiteralPath $journal.FullName -Force -ErrorAction Stop
             $deletedJournals++
@@ -1872,21 +1926,21 @@ function Invoke-ModuleBackups {
     }
 
     Write-Blank
-    Write-Bullet 'Итог'
+    Write-Bullet (Get-UiText 'Итог' 'Result')
     Write-Blank
-    Write-Kv 'Удалено backup-папок' ("$deletedBackups из $($safeBackups.Count)") $Script:C.Green
-    Write-Kv 'Удалено журналов' ("$deletedJournals из $($journals.Count)") $Script:C.Green
+    Write-Kv (Get-UiText 'Удалено backup-папок' 'Backup folders deleted') ((Get-UiText "$deletedBackups из $($safeBackups.Count)" "$deletedBackups of $($safeBackups.Count)")) $Script:C.Green
+    Write-Kv (Get-UiText 'Удалено журналов' 'Journals deleted') ((Get-UiText "$deletedJournals из $($journals.Count)" "$deletedJournals of $($journals.Count)")) $Script:C.Green
     if ($failedBackups -gt 0 -or $failedJournals -gt 0) {
-        Write-Kv 'Ошибок' ([string]($failedBackups + $failedJournals)) $Script:C.Red
+        Write-Kv (Get-UiText 'Ошибок' 'Errors') ([string]($failedBackups + $failedJournals)) $Script:C.Red
     }
-    Write-Kv 'Освобождено' $freed
+    Write-Kv (Get-UiText 'Освобождено' 'Space freed') $freed
 
     try {
         $report | Export-Csv -LiteralPath $reportPath -NoTypeInformation -Encoding UTF8
         Write-Blank
-        Write-Ok "Отчёт: $reportPath"
+        Write-Ok (Get-UiText "Отчёт: $reportPath" "Report: $reportPath")
     }
-    catch { Write-Fail "не удалось сохранить отчёт: $($_.Exception.Message)" }
+    catch { Write-Fail (Get-UiText "не удалось сохранить отчёт: $($_.Exception.Message)" "could not save report: $($_.Exception.Message)") }
 
     Wait-Menu
 }
@@ -2005,7 +2059,7 @@ function Get-ExclusionTargets {
         $n = Get-NormalizedPath $Path
         if (-not $n) { return }
         if (-not (Test-SafeExclusionPath $n)) {
-            Write-AutodeskLog "Пропущен слишком широкий путь ($Source): $n" WARN
+            Write-AutodeskLog (Get-UiText "Пропущен слишком широкий путь ($Source): $n" "Skipped overly broad path ($Source): $n") WARN
             return
         }
         if (-not $AllowMissing -and -not (Test-Path -LiteralPath $n -PathType Container)) { return }
@@ -2019,14 +2073,14 @@ function Get-ExclusionTargets {
         "$PF\Common Files\Macrovision Shared\FLEXnet Publisher",
         "$PF86\Common Files\Macrovision Shared\FLEXnet Publisher",
         "$PD\Autodesk", "$PD\FLEXnet"
-    ) | ForEach-Object { & $add $_ 'стандартный' $false }
+    ) | ForEach-Object { & $add $_ (Get-UiText 'стандартный' 'standard') $false }
 
     # 2. Каталоги верхнего уровня с Autodesk / Revit / pyRevit в имени
     foreach ($root in @($PF, $PF86, $PD)) {
         if (-not $root -or -not (Test-Path -LiteralPath $root)) { continue }
         Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -match $NamePattern } |
-            ForEach-Object { & $add $_.FullName 'поиск по имени' $false }
+            ForEach-Object { & $add $_.FullName (Get-UiText 'поиск по имени' 'name search') $false }
     }
 
     # 3. Места установки из реестра (машина + все загруженные профили)
@@ -2044,7 +2098,7 @@ function Get-ExclusionTargets {
                 } |
                 ForEach-Object {
                     if ($_.PSObject.Properties['InstallLocation'] -and $_.InstallLocation) {
-                        & $add $_.InstallLocation 'реестр' $false
+                        & $add $_.InstallLocation (Get-UiText 'реестр' 'registry') $false
                     }
                 }
         } catch {}
@@ -2052,7 +2106,7 @@ function Get-ExclusionTargets {
 
     # 4. Профили ВСЕХ пользователей (а не только того, кто запустил скрипт)
     foreach ($prof in Get-UserProfilePaths) {
-        $who = "профиль $(Split-Path -Leaf $prof)"
+        $who = (Get-UiText "профиль $(Split-Path -Leaf $prof)" "profile $(Split-Path -Leaf $prof)")
         @(
             'AppData\Roaming\Autodesk', 'AppData\Local\Autodesk',
             'AppData\Roaming\pyRevit', 'AppData\Roaming\pyRevit-Master', 'AppData\Local\pyRevit',
@@ -2096,19 +2150,19 @@ function Test-DefenderReady {
     try {
         $st = Get-MpComputerStatus -ErrorAction Stop
         if ($st.PSObject.Properties['AMRunningMode'] -and $st.AMRunningMode -and $st.AMRunningMode -ne 'Normal') {
-            Write-AutodeskLog "Defender в режиме '$($st.AMRunningMode)' - вероятно, установлен сторонний антивирус. Исключения Autodesk нужно добавить и в него." WARN
+            Write-AutodeskLog (Get-UiText "Defender в режиме '$($st.AMRunningMode)' - вероятно, установлен сторонний антивирус. Исключения Autodesk нужно добавить и в него." "Defender mode is '$($st.AMRunningMode)' - another antivirus may be installed. Add Autodesk exclusions there as well.") WARN
         }
         if (-not $st.AntivirusEnabled) {
-            Write-AutodeskLog 'Антивирус Defender выключен. Исключения сохранятся и начнут действовать после его включения.' WARN
+            Write-AutodeskLog (Get-UiText 'Антивирус Defender выключен. Исключения сохранятся и начнут действовать после его включения.' 'Defender antivirus is disabled. Exclusions will take effect when it is enabled.') WARN
         }
     } catch {
-        Write-AutodeskLog "Служба Defender недоступна: $($_.Exception.Message)" ERROR
+        Write-AutodeskLog (Get-UiText "Служба Defender недоступна: $($_.Exception.Message)" "Defender service unavailable: $($_.Exception.Message)") ERROR
         $ok = $false
     }
     try {
         $v = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender' -Name DisableLocalAdminMerge -ErrorAction Stop).DisableLocalAdminMerge
         if ($v -eq 1) {
-            Write-AutodeskLog 'Включена политика DisableLocalAdminMerge: локальные исключения игнорируются. Задайте их через GPO/Intune.' WARN
+            Write-AutodeskLog (Get-UiText 'Включена политика DisableLocalAdminMerge: локальные исключения игнорируются. Задайте их через GPO/Intune.' 'DisableLocalAdminMerge policy is enabled: local exclusions are ignored. Configure them through GPO/Intune.') WARN
         }
     } catch {}
     return $ok
@@ -2136,7 +2190,7 @@ function Read-State {
             @($j.Paths)     | Where-Object { $_ } | ForEach-Object { [void]$paths.Add(([string]$_).TrimEnd('\')) }
             @($j.Processes) | Where-Object { $_ } | ForEach-Object { [void]$procs.Add([string]$_) }
         } catch {
-            throw "Не удалось прочитать файл учёта $f : $($_.Exception.Message)"
+            throw (Get-UiText "Не удалось прочитать файл учёта $f : $($_.Exception.Message)" "Could not read ownership file $f : $($_.Exception.Message)")
         }
     }
     return [pscustomobject]@{ Paths = $paths; Processes = $procs }
@@ -2207,7 +2261,7 @@ function Get-NetworkStatus {
     $enabled = @($rules | Where-Object { $_.Enabled -eq 'True' }).Count
     [pscustomobject]@{
         Product=$Product; Executables=$exe; Rules=$rules; EnabledRules=$enabled
-        State = if (-not $exe.Count) {'НЕ НАЙДЕН'} elseif ($enabled -gt 0) {'PUBLIC: БЛОК'} else {'PUBLIC: НЕТ'}
+        State = if (-not $exe.Count) {(Get-UiText 'НЕ НАЙДЕН' 'NOT FOUND')} elseif ($enabled -gt 0) {(Get-UiText 'PUBLIC: БЛОК' 'PUBLIC: BLOCK')} else {(Get-UiText 'PUBLIC: НЕТ' 'PUBLIC: NONE')}
     }
 }
 
@@ -2217,12 +2271,12 @@ function Set-ProductInternet {
         [bool]$Block
     )
     $exe = @(Get-ProductExecutables $Product)
-    if ($Block -and -not $exe.Count) { Write-AutodeskLog "${Product}: исполняемые файлы не найдены." WARN; return }
+    if ($Block -and -not $exe.Count) { Write-AutodeskLog (Get-UiText "${Product}: исполняемые файлы не найдены." "${Product}: no executables found.") WARN; return }
 
     foreach ($path in $exe) { Write-Info "${Product}: $path" }
-    if (Test-DryRun "${Product}: блокировка Public = $Block") { return }
+    if (Test-DryRun (Get-UiText "${Product}: блокировка Public = $Block" "${Product}: block Public = $Block")) { return }
     if (-not (Assert-Admin)) { return }
-    if (-not (Confirm-Action -Question "${Product}: блокировка Public = $Block ?" -Danger)) { return }
+    if (-not (Confirm-Action -Question (Get-UiText "${Product}: блокировка Public = $Block ?" "${Product}: block Public = $Block ?") -Danger)) { return }
     if ($Block) {
         foreach ($path in $exe) {
             $name = Get-NetRuleName $Product $path
@@ -2232,29 +2286,29 @@ function Set-ProductInternet {
                 New-NetFirewallRule -DisplayName $name -Group 'Autodesk Defender Exclusions - Network' `
                     -Direction Outbound -Action Block -Program $path -Profile Public -Enabled True `
                     -Description "Managed by Autodesk_Defender_Exclusions.ps1. Blocks $Product on Public networks only." | Out-Null
-                Write-AutodeskLog "${Product}: Интернет заблокирован (Public): $path" OK
-            } catch { Write-AutodeskLog "${Product}: не удалось создать правило для '$path': $($_.Exception.Message)" ERROR }
+                Write-AutodeskLog (Get-UiText "${Product}: Интернет заблокирован (Public): $path" "${Product}: network blocked (Public): $path") OK
+            } catch { Write-AutodeskLog (Get-UiText "${Product}: не удалось создать правило для '$path': $($_.Exception.Message)" "${Product}: could not create rule for '$path': $($_.Exception.Message)") ERROR }
         }
     } else {
         try {
             Get-NetFirewallRule -ErrorAction SilentlyContinue |
                 Where-Object { $_.Group -eq 'Autodesk Defender Exclusions - Network' -and $_.DisplayName -like "$FirewallPrefix-$Product-*" } |
                 Remove-NetFirewallRule -ErrorAction Stop
-            Write-AutodeskLog "${Product}: правила Public этого скрипта удалены." OK
-        } catch { Write-AutodeskLog "${Product}: ошибка удаления сетевых правил: $($_.Exception.Message)" ERROR }
+            Write-AutodeskLog (Get-UiText "${Product}: правила Public этого скрипта удалены." "${Product}: Public rules owned by this script removed.") OK
+        } catch { Write-AutodeskLog (Get-UiText "${Product}: ошибка удаления сетевых правил: $($_.Exception.Message)" "${Product}: error removing network rules: $($_.Exception.Message)") ERROR }
     }
 }
 
 function Show-NetworkStatus {
-    Write-Host "`n=== СЕТЬ AUTODESK ===" -ForegroundColor Cyan
+    Write-Host (Get-UiText "`n=== СЕТЬ AUTODESK ===" "`n=== AUTODESK NETWORK ===") -ForegroundColor Cyan
     foreach ($product in @('AutoCAD','Revit')) {
         $st = Get-NetworkStatus $product
-        $color = if ($st.State -eq 'PUBLIC: БЛОК') {'Yellow'} elseif ($st.State -eq 'PUBLIC: НЕТ') {'Green'} else {'DarkGray'}
-        Write-Host ("  {0,-8} : {1,-14} | найдено EXE: {2} | правил: {3}" -f $product,$st.State,$st.Executables.Count,$st.EnabledRules) -ForegroundColor $color
+        $color = if ($st.State -eq (Get-UiText 'PUBLIC: БЛОК' 'PUBLIC: BLOCK')) {'Yellow'} elseif ($st.State -eq (Get-UiText 'PUBLIC: НЕТ' 'PUBLIC: NONE')) {'Green'} else {'DarkGray'}
+        Write-Host ((Get-UiText "  {0,-8} : {1,-14} | найдено EXE: {2} | правил: {3}" "  {0,-8} : {1,-14} | EXEs found: {2} | rules: {3}") -f $product,$st.State,$st.Executables.Count,$st.EnabledRules) -ForegroundColor $color
     }
     $allRules = @(Get-NetFirewallRule -Group $AllFirewallGroup -ErrorAction SilentlyContinue)
-    Write-Host ("  Все Autodesk: активных правил {0} (все профили)" -f @($allRules | Where-Object { $_.Enabled -eq 'True' }).Count) -ForegroundColor Cyan
-    Write-Host '  Отдельные правила AutoCAD / Revit действуют только в профиле Public.' -ForegroundColor DarkGray
+    Write-Host ((Get-UiText "  Все Autodesk: активных правил {0} (все профили)" "  All Autodesk: active rules {0} (all profiles)") -f @($allRules | Where-Object { $_.Enabled -eq 'True' }).Count) -ForegroundColor Cyan
+    Write-Host (Get-UiText '  Отдельные правила AutoCAD / Revit действуют только в профиле Public.' '  Individual AutoCAD / Revit rules apply to the Public profile only.') -ForegroundColor DarkGray
 }
 
 $AllFirewallGroup = 'Autodesk Control Center - All Network'
@@ -2302,23 +2356,23 @@ function Set-AllAutodeskInternet {
     if ($Block) {
         foreach ($path in @(Get-AllAutodeskExecutables)) { Write-Info "EXE: $path" }
     }
-    if (Test-DryRun "все Autodesk: блокировка входящего и исходящего трафика во всех профилях = $Block") { return }
+    if (Test-DryRun (Get-UiText "все Autodesk: блокировка входящего и исходящего трафика во всех профилях = $Block" "all Autodesk: block inbound and outbound traffic in all profiles = $Block")) { return }
     if (-not (Assert-Admin)) { return }
-    if (-not (Confirm-Action -Question "Все Autodesk: блокировка всех сетевых профилей = $Block ?" -Danger)) { return }
+    if (-not (Confirm-Action -Question (Get-UiText "Все Autodesk: блокировка всех сетевых профилей = $Block ?" "All Autodesk: block all network profiles = $Block ?") -Danger)) { return }
     if (-not $Block) {
         $rules = @(Get-NetFirewallRule -Group $AllFirewallGroup -ErrorAction SilentlyContinue) +
                  @(Get-NetFirewallRule -Group 'Autodesk Defender Exclusions - Network' -ErrorAction SilentlyContinue |
                      Where-Object { $_.DisplayName -like "$FirewallPrefix-*" })
         foreach ($rule in $rules) {
-            try { $rule | Remove-NetFirewallRule -ErrorAction Stop; Write-AutodeskLog "Удалено сетевое правило: $($rule.DisplayName)" OK }
-            catch { Write-AutodeskLog "Ошибка удаления правила '$($rule.DisplayName)': $($_.Exception.Message)" ERROR }
+            try { $rule | Remove-NetFirewallRule -ErrorAction Stop; Write-AutodeskLog (Get-UiText "Удалено сетевое правило: $($rule.DisplayName)" "Removed network rule: $($rule.DisplayName)") OK }
+            catch { Write-AutodeskLog (Get-UiText "Ошибка удаления правила '$($rule.DisplayName)': $($_.Exception.Message)" "Error removing rule '$($rule.DisplayName)': $($_.Exception.Message)") ERROR }
         }
-        if (-not $rules.Count) { Write-AutodeskLog 'Сетевых правил этого скрипта нет.' INFO }
+        if (-not $rules.Count) { Write-AutodeskLog (Get-UiText 'Сетевых правил этого скрипта нет.' 'No network rules owned by this script.') INFO }
         return
     }
     $executables = @(Get-AllAutodeskExecutables)
-    if (-not $executables.Count) { Write-AutodeskLog 'Исполняемые файлы Autodesk не найдены.' WARN; return }
-    Write-Host ("`nНайдено программ Autodesk: {0}. Создаю правила для всех сетевых профилей..." -f $executables.Count) -ForegroundColor Cyan
+    if (-not $executables.Count) { Write-AutodeskLog (Get-UiText 'Исполняемые файлы Autodesk не найдены.' 'No Autodesk executables found.') WARN; return }
+    Write-Host ((Get-UiText "`nНайдено программ Autodesk: {0}. Создаю правила для всех сетевых профилей..." "`nAutodesk programs found: {0}. Creating rules for all network profiles...") -f $executables.Count) -ForegroundColor Cyan
     $added = 0
     $failed = 0
     foreach ($path in $executables) {
@@ -2329,7 +2383,7 @@ function Set-AllAutodeskInternet {
             try {
                 $existing = Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
                 if ($existing) {
-                    if ($existing.Group -ne $AllFirewallGroup) { throw 'Совпало имя чужого правила; оно не изменено.' }
+                    if ($existing.Group -ne $AllFirewallGroup) { throw (Get-UiText 'Совпало имя чужого правила; оно не изменено.' 'Name conflicts with another rule; it was not changed.') }
                     $existing | Set-NetFirewallRule -Profile Any -Action Block -Enabled True -ErrorAction Stop
                     continue
                 }
@@ -2337,11 +2391,11 @@ function Set-AllAutodeskInternet {
                     -Direction $dir -Action Block -Program $path -Profile Any -Enabled True `
                     -Description "Managed by Autodesk Control Center. Blocks $dir network traffic on all profiles." -ErrorAction Stop | Out-Null
                 $added++
-            } catch { Write-AutodeskLog "Ошибка правила ($dir) для '$path': $($_.Exception.Message)" ERROR; $failed++ }
+            } catch { Write-AutodeskLog (Get-UiText "Ошибка правила ($dir) для '$path': $($_.Exception.Message)" "Rule error ($dir) for '$path': $($_.Exception.Message)") ERROR; $failed++ }
         }
     }
     $level = if ($failed) { 'WARN' } else { 'OK' }
-    Write-AutodeskLog ("Готово: найдено {0}, новых правил {1}, ошибок {2}. Повторите после установки новых версий Autodesk." -f $executables.Count, $added, $failed) $level
+    Write-AutodeskLog ((Get-UiText "Готово: найдено {0}, новых правил {1}, ошибок {2}. Повторите после установки новых версий Autodesk." "Done: found {0}, new rules {1}, errors {2}. Run again after installing new Autodesk versions.") -f $executables.Count, $added, $failed) $level
 }
 
 # Firewall App Blocker (sordum.org) из папки рядом со скриптом. Видит и правила этого скрипта.
@@ -2360,15 +2414,15 @@ function Set-NlmInternet {
     $executables = @()
     if ($Block) {
         $executables = @(Get-NlmExecutables)
-        if (-not $executables.Count) { Write-AutodeskLog 'EXE Network License Manager не найдены.' WARN; return }
+        if (-not $executables.Count) { Write-AutodeskLog (Get-UiText 'EXE Network License Manager не найдены.' 'No Network License Manager EXEs found.') WARN; return }
         foreach ($path in $executables) { Write-Info "Network License Manager: $path" }
     }
-    if (Test-DryRun "Network License Manager: блокировка исходящей сети = $Block; правила Revit не изменяются") { return }
+    if (Test-DryRun (Get-UiText "Network License Manager: блокировка исходящей сети = $Block; правила Revit не изменяются" "Network License Manager: block outbound network = $Block; Revit rules are unchanged")) { return }
     if (-not (Assert-Admin)) { return }
-    if (-not (Confirm-Action -Question "Network License Manager: блокировка исходящей сети = $Block ? Блок включает локальную сеть и может нарушить сетевое лицензирование." -Danger)) { return }
+    if (-not (Confirm-Action -Question (Get-UiText "Network License Manager: блокировка исходящей сети = $Block ? Блок включает локальную сеть и может нарушить сетевое лицензирование." "Network License Manager: block outbound network = $Block ? Includes LAN and may disrupt network licensing.") -Danger)) { return }
     if (-not $Block) {
         Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
-        Write-AutodeskLog 'Удалены правила Network License Manager этого модуля.' OK
+        Write-AutodeskLog (Get-UiText 'Удалены правила Network License Manager этого модуля.' 'This module''s Network License Manager rules have been removed.') OK
         return
     }
     foreach ($path in $executables) {
@@ -2376,14 +2430,14 @@ function Set-NlmInternet {
         try {
             $existing = Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
             if ($existing) {
-                if ($existing.Group -ne $group) { throw 'Совпало имя чужого правила; оно не изменено.' }
+                if ($existing.Group -ne $group) { throw (Get-UiText 'Совпало имя чужого правила; оно не изменено.' 'Name conflicts with another rule; it was not changed.') }
                 $existing | Set-NetFirewallRule -Direction Outbound -Profile Any -Action Block -Enabled True -ErrorAction Stop
             } else {
                 New-NetFirewallRule -Name $name -DisplayName "Network License Manager - $([IO.Path]::GetFileName($path))" `
                     -Group $group -Direction Outbound -Action Block -Program $path -Profile Any -Enabled True -ErrorAction Stop | Out-Null
             }
-            Write-AutodeskLog "Заблокирована исходящая сеть: $path" OK
-        } catch { Write-AutodeskLog "Ошибка блокировки '$path': $($_.Exception.Message)" ERROR }
+            Write-AutodeskLog (Get-UiText "Заблокирована исходящая сеть: $path" "Outbound network blocked: $path") OK
+        } catch { Write-AutodeskLog (Get-UiText "Ошибка блокировки '$path': $($_.Exception.Message)" "Error blocking '$path': $($_.Exception.Message)") ERROR }
     }
 }
 
@@ -2392,61 +2446,61 @@ function Start-Fab {
     $fab = Get-ChildItem -LiteralPath $ScriptRoot -Directory -Filter 'Fab*' -ErrorAction SilentlyContinue |
         ForEach-Object { Join-Path $_.FullName $exe } |
         Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-    if (-not $fab) { Write-AutodeskLog "Fab не найден: ожидается папка 'Fab*\$exe' рядом со скриптом." WARN; return }
-    if (Test-DryRun "запуск FAB: $fab") { return }
+    if (-not $fab) { Write-AutodeskLog (Get-UiText "Fab не найден: ожидается папка 'Fab*\$exe' рядом со скриптом." "Fab not found: expected folder 'Fab*\$exe' next to the script.") WARN; return }
+    if (Test-DryRun (Get-UiText "запуск FAB: $fab" "launch FAB: $fab")) { return }
     if (-not (Assert-Admin)) { return }
     Start-Process -FilePath $fab -WorkingDirectory (Split-Path -Parent $fab)
-    Write-AutodeskLog "Запущен Fab: $fab"
+    Write-AutodeskLog (Get-UiText "Запущен Fab: $fab" "Fab launched: $fab")
 }
 
 function Invoke-Install {
     if (-not $Script:Ctx.DryRun -and -not (Assert-Admin)) { return }
     if (-not (Test-DefenderReady)) { return }
 
-    Write-Host "`nПоиск каталогов Autodesk..." -ForegroundColor Cyan
+    Write-Host (Get-UiText "`nПоиск каталогов Autodesk..." "`nSearching for Autodesk folders...") -ForegroundColor Cyan
     $targets = Get-ExclusionTargets
-    foreach ($p in ($targets.Keys | Sort-Object)) { Write-Info "Каталог: $p" }
-    foreach ($p in $ProcessList) { Write-Info "Процесс: $p" }
-    if (Test-DryRun 'добавление недостающих исключений Autodesk') { return }
-    if (-not (Confirm-Action -Question 'Добавить исключения Autodesk? Проверка этих каталогов и файлов процессов будет отключена.' -Danger)) { return }
+    foreach ($p in ($targets.Keys | Sort-Object)) { Write-Info (Get-UiText "Каталог: $p" "Folder: $p") }
+    foreach ($p in $ProcessList) { Write-Info (Get-UiText "Процесс: $p" "Process: $p") }
+    if (Test-DryRun (Get-UiText 'добавление недостающих исключений Autodesk' 'adding missing Autodesk exclusions')) { return }
+    if (-not (Confirm-Action -Question (Get-UiText 'Добавить исключения Autodesk? Проверка этих каталогов и файлов процессов будет отключена.' 'Add Autodesk exclusions? Scanning these folders and files accessed by these processes will be disabled.') -Danger)) { return }
 
     $current = Get-CurrentExclusions
     $state   = Read-State
 
     $added = 0; $exists = 0; $failed = 0
 
-    Write-Host "`n--- Каталоги ($($targets.Count)) ---" -ForegroundColor Cyan
+    Write-Host (Get-UiText "`n--- Каталоги ($($targets.Count)) ---" "`n--- Folders ($($targets.Count)) ---") -ForegroundColor Cyan
     foreach ($p in $targets.Keys) {
         if ($current.Paths.Contains($p)) {
-            Write-AutodeskLog "Уже есть: $p"
+            Write-AutodeskLog (Get-UiText "Уже есть: $p" "Already present: $p")
             $exists++
             continue
         }
         try {
             Add-MpPreference -ExclusionPath $p -ErrorAction Stop
             [void]$state.Paths.Add($p); Save-State $state.Paths $state.Processes
-            Write-AutodeskLog "Добавлен каталог [$($targets[$p])]: $p" OK
+            Write-AutodeskLog (Get-UiText "Добавлен каталог [$($targets[$p])]: $p" "Added folder [$($targets[$p])]: $p") OK
             $added++
         } catch {
-            Write-AutodeskLog "Ошибка добавления каталога '$p': $($_.Exception.Message)" ERROR
+            Write-AutodeskLog (Get-UiText "Ошибка добавления каталога '$p': $($_.Exception.Message)" "Error adding folder '$p': $($_.Exception.Message)") ERROR
             $failed++
         }
     }
 
-    Write-Host "`n--- Процессы ($($ProcessList.Count)) ---" -ForegroundColor Cyan
+    Write-Host (Get-UiText "`n--- Процессы ($($ProcessList.Count)) ---" "`n--- Processes ($($ProcessList.Count)) ---") -ForegroundColor Cyan
     foreach ($proc in $ProcessList) {
         if ($current.Processes.Contains($proc)) {
-            Write-AutodeskLog "Уже есть: $proc"
+            Write-AutodeskLog (Get-UiText "Уже есть: $proc" "Already present: $proc")
             $exists++
             continue
         }
         try {
             Add-MpPreference -ExclusionProcess $proc -ErrorAction Stop
             [void]$state.Processes.Add($proc); Save-State $state.Paths $state.Processes
-            Write-AutodeskLog "Добавлен процесс: $proc" OK
+            Write-AutodeskLog (Get-UiText "Добавлен процесс: $proc" "Added process: $proc") OK
             $added++
         } catch {
-            Write-AutodeskLog "Ошибка добавления процесса '$proc': $($_.Exception.Message)" ERROR
+            Write-AutodeskLog (Get-UiText "Ошибка добавления процесса '$proc': $($_.Exception.Message)" "Error adding process '$proc': $($_.Exception.Message)") ERROR
             $failed++
         }
     }
@@ -2454,7 +2508,7 @@ function Invoke-Install {
     Save-State $state.Paths $state.Processes
     if (Test-Path -LiteralPath $LegacyMarker) {
         Remove-Item -LiteralPath $LegacyMarker -Force -ErrorAction SilentlyContinue
-        Write-AutodeskLog 'Старый файл учёта рядом со скриптом перенесён в ProgramData.'
+        Write-AutodeskLog (Get-UiText 'Старый файл учёта рядом со скриптом перенесён в ProgramData.' 'Legacy ownership file next to the script migrated to ProgramData.')
     }
 
     # Контрольная проверка
@@ -2463,11 +2517,11 @@ function Invoke-Install {
                @($ProcessList  | Where-Object { -not $after.Processes.Contains($_) })
 
     Write-Host ''
-    Write-AutodeskLog ("Итог: добавлено {0}, уже было {1}, ошибок {2}." -f $added, $exists, $failed) $(if ($failed) { 'WARN' } else { 'OK' })
+    Write-AutodeskLog ((Get-UiText "Итог: добавлено {0}, уже было {1}, ошибок {2}." "Result: added {0}, already present {1}, errors {2}.") -f $added, $exists, $failed) $(if ($failed) { 'WARN' } else { 'OK' })
     if ($missing.Count) {
-        Write-AutodeskLog "После установки не применились: $($missing -join '; ')" ERROR
+        Write-AutodeskLog (Get-UiText "После установки не применились: $($missing -join '; ')" "Not applied after installation: $($missing -join '; ')") ERROR
     } else {
-        Write-AutodeskLog 'Проверка пройдена: все исключения Autodesk активны.' OK
+        Write-AutodeskLog (Get-UiText 'Проверка пройдена: все исключения Autodesk активны.' 'Verification passed: all Autodesk exclusions are active.') OK
     }
 }
 
@@ -2478,44 +2532,44 @@ function Invoke-Check {
     $state   = Read-State
     $miss = 0
 
-    Write-Host "`n=== Каталоги Autodesk ===" -ForegroundColor Cyan
+    Write-Host (Get-UiText "`n=== Каталоги Autodesk ===" "`n=== Autodesk folders ===") -ForegroundColor Cyan
     foreach ($p in $targets.Keys) {
         if ($current.Paths.Contains($p)) { Write-Host "  [OK]  $p" -ForegroundColor Green }
-        else { Write-Host "  [НЕТ] $p" -ForegroundColor Yellow; $miss++ }
+        else { Write-Host (Get-UiText "  [НЕТ] $p" "  [MISSING] $p") -ForegroundColor Yellow; $miss++ }
     }
 
-    Write-Host "`n=== Процессы Autodesk ===" -ForegroundColor Cyan
+    Write-Host (Get-UiText "`n=== Процессы Autodesk ===" "`n=== Autodesk processes ===") -ForegroundColor Cyan
     foreach ($proc in $ProcessList) {
         if ($current.Processes.Contains($proc)) { Write-Host "  [OK]  $proc" -ForegroundColor Green }
-        else { Write-Host "  [НЕТ] $proc" -ForegroundColor Yellow; $miss++ }
+        else { Write-Host (Get-UiText "  [НЕТ] $proc" "  [MISSING] $proc") -ForegroundColor Yellow; $miss++ }
     }
 
     $otherPaths = @($current.Paths | Where-Object { -not $targets.ContainsKey($_) } | Sort-Object)
     $otherProcs = @($current.Processes | Where-Object { $ProcessList -notcontains $_ } | Sort-Object)
     if ($otherPaths.Count -or $otherProcs.Count) {
-        Write-Host "`n=== Прочие исключения Defender ===" -ForegroundColor DarkCyan
+        Write-Host (Get-UiText "`n=== Прочие исключения Defender ===" "`n=== Other Defender exclusions ===") -ForegroundColor DarkCyan
         $otherPaths | ForEach-Object { Write-Host "  $_" }
-        $otherProcs | ForEach-Object { Write-Host "  $_ (процесс)" }
+        $otherProcs | ForEach-Object { Write-Host (Get-UiText "  $_ (процесс)" "  $_ (process)") }
     }
 
     Write-Host ''
-    if ($miss) { Write-Host "Не хватает исключений: $miss. Выполните установку (пункт 1)." -ForegroundColor Yellow }
-    else       { Write-Host 'Все исключения Autodesk на месте.' -ForegroundColor Green }
-    Write-Host ("Добавлено этим скриптом: каталогов {0}, процессов {1}. Учёт: {2}" -f $state.Paths.Count, $state.Processes.Count, $StateFile) -ForegroundColor DarkGray
+    if ($miss) { Write-Host (Get-UiText "Не хватает исключений: $miss. Выполните установку (пункт 1)." "Missing exclusions: $miss. Add them using item 1.") -ForegroundColor Yellow }
+    else       { Write-Host (Get-UiText 'Все исключения Autodesk на месте.' 'All Autodesk exclusions are present.') -ForegroundColor Green }
+    Write-Host ((Get-UiText "Добавлено этим скриптом: каталогов {0}, процессов {1}. Учёт: {2}" "Owned by this script: folders {0}, processes {1}. Ownership file: {2}") -f $state.Paths.Count, $state.Processes.Count, $StateFile) -ForegroundColor DarkGray
 }
 
 function Invoke-Remove {
     if (-not $Script:Ctx.DryRun -and -not (Assert-Admin)) { return }
     $state = Read-State
     if (-not $state.Paths.Count -and -not $state.Processes.Count) {
-        Write-AutodeskLog 'Нет исключений, добавленных этим скриптом. Чужие исключения не трогаю.' WARN
+        Write-AutodeskLog (Get-UiText 'Нет исключений, добавленных этим скриптом. Чужие исключения не трогаю.' 'No exclusions owned by this script. Other exclusions are preserved.') WARN
         return
     }
 
-    foreach ($p in $state.Paths) { Write-Info "Удалить каталог: $p" }
-    foreach ($p in $state.Processes) { Write-Info "Удалить процесс: $p" }
-    if (Test-DryRun 'удаление только учтённых исключений Autodesk') { return }
-    if (-not (Confirm-Action -Question 'Удалить учтённые исключения Autodesk?')) { return }
+    foreach ($p in $state.Paths) { Write-Info (Get-UiText "Удалить каталог: $p" "Remove folder: $p") }
+    foreach ($p in $state.Processes) { Write-Info (Get-UiText "Удалить процесс: $p" "Remove process: $p") }
+    if (Test-DryRun (Get-UiText 'удаление только учтённых исключений Autodesk' 'remove only owned Autodesk exclusions')) { return }
+    if (-not (Confirm-Action -Question (Get-UiText 'Удалить учтённые исключения Autodesk?' 'Remove owned Autodesk exclusions?'))) { return }
 
     $leftPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     $leftProcs = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
@@ -2523,18 +2577,18 @@ function Invoke-Remove {
     foreach ($p in @($state.Paths)) {
         try {
             Remove-MpPreference -ExclusionPath $p -ErrorAction Stop
-            Write-AutodeskLog "Удалён каталог: $p" OK
+            Write-AutodeskLog (Get-UiText "Удалён каталог: $p" "Removed folder: $p") OK
         } catch {
-            Write-AutodeskLog "Не удалось удалить каталог '$p': $($_.Exception.Message)" ERROR
+            Write-AutodeskLog (Get-UiText "Не удалось удалить каталог '$p': $($_.Exception.Message)" "Could not remove folder '$p': $($_.Exception.Message)") ERROR
             [void]$leftPaths.Add($p)
         }
     }
     foreach ($p in @($state.Processes)) {
         try {
             Remove-MpPreference -ExclusionProcess $p -ErrorAction Stop
-            Write-AutodeskLog "Удалён процесс: $p" OK
+            Write-AutodeskLog (Get-UiText "Удалён процесс: $p" "Removed process: $p") OK
         } catch {
-            Write-AutodeskLog "Не удалось удалить процесс '$p': $($_.Exception.Message)" ERROR
+            Write-AutodeskLog (Get-UiText "Не удалось удалить процесс '$p': $($_.Exception.Message)" "Could not remove process '$p': $($_.Exception.Message)") ERROR
             [void]$leftProcs.Add($p)
         }
     }
@@ -2543,30 +2597,30 @@ function Invoke-Remove {
     Remove-Item -LiteralPath $LegacyMarker -Force -ErrorAction SilentlyContinue
 
     if ($leftPaths.Count -or $leftProcs.Count) {
-        Write-AutodeskLog 'Удалено не всё - повторите удаление позже.' WARN
+        Write-AutodeskLog (Get-UiText 'Удалено не всё - повторите удаление позже.' 'Some entries could not be removed; retry later.') WARN
     } else {
-        Write-AutodeskLog 'Удалены все исключения, добавленные этим скриптом.' OK
+        Write-AutodeskLog (Get-UiText 'Удалены все исключения, добавленные этим скриптом.' 'All exclusions added by this script have been removed.') OK
     }
 }
 
 
     $items = @(
-        [pscustomobject]@{ Key='1'; Title='Добавить исключения Defender'; Desc='Каталоги, профили пользователей, процессы Autodesk' },
-        [pscustomobject]@{ Key='2'; Title='Проверить исключения'; Desc='Найденные, отсутствующие и сторонние исключения' },
-        [pscustomobject]@{ Key='3'; Title='Удалить учтённые исключения'; Desc='Только добавленные этим скриптом или исходной утилитой' },
-        [pscustomobject]@{ Key='4'; Title='Состояние сети'; Desc='Правила Autodesk в Windows Firewall' },
-        [pscustomobject]@{ Key='5'; Title='AutoCAD: блокировать Public'; Desc='Исходящий трафик' },
-        [pscustomobject]@{ Key='6'; Title='AutoCAD: удалить правила Public'; Desc='Удаление блокировок утилиты' },
-        [pscustomobject]@{ Key='7'; Title='Revit: блокировать Public'; Desc='Исходящий трафик' },
-        [pscustomobject]@{ Key='8'; Title='Revit: удалить правила Public'; Desc='Удаление блокировок утилиты' },
-        [pscustomobject]@{ Key='a'; Title='Все Autodesk: блокировать сеть'; Desc='Все найденные EXE, оба направления, все профили' },
-        [pscustomobject]@{ Key='b'; Title='Все Autodesk: удалить блокировки'; Desc='Только правила утилиты' },
-        [pscustomobject]@{ Key='n'; Title='Network License Manager: блокировать сеть'; Desc='Только EXE этой папки; исходящий трафик, все профили' },
-        [pscustomobject]@{ Key='u'; Title='Network License Manager: удалить блокировку'; Desc='Только правила этого модуля; Revit не изменяется' },
-        [pscustomobject]@{ Key='f'; Title='Открыть Firewall App Blocker'; Desc='Необязательно: папка Fab* рядом со скриптом' }
+        [pscustomobject]@{ Key='1'; Title=(Get-UiText 'Добавить исключения Defender' 'Add Defender exclusions'); Desc=(Get-UiText 'Каталоги, профили пользователей, процессы Autodesk' 'Folders, user profiles, Autodesk processes') },
+        [pscustomobject]@{ Key='2'; Title=(Get-UiText 'Проверить исключения' 'Check exclusions'); Desc=(Get-UiText 'Найденные, отсутствующие и сторонние исключения' 'Present, missing and other exclusions') },
+        [pscustomobject]@{ Key='3'; Title=(Get-UiText 'Удалить учтённые исключения' 'Remove owned exclusions'); Desc=(Get-UiText 'Только добавленные этим скриптом или исходной утилитой' 'Only entries added by this script or the original utility') },
+        [pscustomobject]@{ Key='4'; Title=(Get-UiText 'Состояние сети' 'Network status'); Desc=(Get-UiText 'Правила Autodesk в Windows Firewall' 'Autodesk rules in Windows Firewall') },
+        [pscustomobject]@{ Key='5'; Title=(Get-UiText 'AutoCAD: блокировать Public' 'AutoCAD: block Public'); Desc=(Get-UiText 'Исходящий трафик' 'Outbound traffic') },
+        [pscustomobject]@{ Key='6'; Title=(Get-UiText 'AutoCAD: удалить правила Public' 'AutoCAD: remove Public rules'); Desc=(Get-UiText 'Удаление блокировок утилиты' 'Remove blocks owned by the utility') },
+        [pscustomobject]@{ Key='7'; Title=(Get-UiText 'Revit: блокировать Public' 'Revit: block Public'); Desc=(Get-UiText 'Исходящий трафик' 'Outbound traffic') },
+        [pscustomobject]@{ Key='8'; Title=(Get-UiText 'Revit: удалить правила Public' 'Revit: remove Public rules'); Desc=(Get-UiText 'Удаление блокировок утилиты' 'Remove blocks owned by the utility') },
+        [pscustomobject]@{ Key='a'; Title=(Get-UiText 'Все Autodesk: блокировать сеть' 'All Autodesk: block network'); Desc=(Get-UiText 'Все найденные EXE, оба направления, все профили' 'All discovered EXEs, both directions, all profiles') },
+        [pscustomobject]@{ Key='b'; Title=(Get-UiText 'Все Autodesk: удалить блокировки' 'All Autodesk: remove blocks'); Desc=(Get-UiText 'Только правила утилиты' 'Only rules owned by the utility') },
+        [pscustomobject]@{ Key='n'; Title=(Get-UiText 'Network License Manager: блокировать сеть' 'Network License Manager: block network'); Desc=(Get-UiText 'Только EXE этой папки; исходящий трафик, все профили' 'Only EXEs in this folder; outbound traffic, all profiles') },
+        [pscustomobject]@{ Key='u'; Title=(Get-UiText 'Network License Manager: удалить блокировку' 'Network License Manager: remove block'); Desc=(Get-UiText 'Только правила этого модуля; Revit не изменяется' 'Only this module''s rules; Revit is unchanged') },
+        [pscustomobject]@{ Key='f'; Title=(Get-UiText 'Открыть Firewall App Blocker' 'Open Firewall App Blocker'); Desc=(Get-UiText 'Необязательно: папка Fab* рядом со скриптом' 'Optional: Fab* folder next to the script') }
     )
     while ($true) {
-        $choice = Show-Menu -Items $items -Title 'Autodesk: Defender и сеть' -BackText 'Назад'
+        $choice = Show-Menu -Items $items -Title (Get-UiText 'Autodesk: Defender и сеть' 'Autodesk: Defender and network') -BackText (Get-UiText 'Назад' 'Back')
         if ($choice -eq '0') { return }
         try {
             switch ($choice) {
@@ -2589,18 +2643,196 @@ function Invoke-Remove {
     }
 }
 
+# RSN.ini lists Revit Server Hosts, one address per line (not INI sections).
+function Get-RsnPath {
+    param([ValidateRange(2000, 2099)][int]$Version)
+    return Join-Path $env:ProgramData "Autodesk\Revit Server $Version\Config\RSN.ini"
+}
+
+function Test-RsnAddress {
+    param([string]$Address)
+    if ([string]::IsNullOrWhiteSpace($Address) -or $Address.Length -gt 63 -or $Address -ne $Address.Trim()) { return $false }
+    $ip = $null
+    if ([Net.IPAddress]::TryParse($Address, [ref]$ip)) {
+        if ($ip.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) { return $Address -match '^\d{1,3}(\.\d{1,3}){3}$' }
+        return $true
+    }
+    if ($Address -match '^[\d.]+$') { return $false }
+    return $Address -match '^[a-zA-Z0-9](?:[a-zA-Z0-9_-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9_-]*[a-zA-Z0-9])?)*$'
+}
+
+function Get-RsnLines {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
+    return @([IO.File]::ReadAllLines($Path))
+}
+
+function Get-RsnEntries {
+    param([AllowEmptyCollection()][string[]]$Lines)
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $address = $Lines[$i].Trim()
+        if ($address -and $address -notmatch '^[#;]') {
+            [pscustomobject]@{ Index=$i; Address=$address }
+        }
+    }
+}
+
+function Update-RsnLines {
+    param(
+        [AllowEmptyCollection()][string[]]$Lines,
+        [ValidateSet('Add', 'Edit', 'Remove')][string]$Action,
+        [string]$Address = '',
+        [int]$Index = -1
+    )
+    if ($Action -ne 'Remove' -and -not (Test-RsnAddress $Address)) {
+        throw (Get-UiText 'Недопустимый адрес сервера. Введите имя или IP без URL, порта и пробелов; максимум 63 символа.' 'Invalid server address. Enter a name or IP without URL, port or spaces; maximum 63 characters.')
+    }
+    if ($Action -ne 'Add' -and ($Index -lt 0 -or $Index -ge $Lines.Count)) { throw 'Invalid RSN line index' }
+    $entries = @(Get-RsnEntries $Lines)
+    if ($Action -ne 'Remove' -and @($entries | Where-Object { $_.Index -ne $Index -and $_.Address -ieq $Address }).Count) {
+        throw (Get-UiText 'Такой сервер уже есть в RSN.ini.' 'This server is already in RSN.ini.')
+    }
+    if ($Action -eq 'Add') { return @($Lines) + @($Address) }
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($i -ne $Index) { $Lines[$i] }
+        elseif ($Action -eq 'Edit') { $Address }
+    }
+}
+
+function Save-RsnLines {
+    param([string]$Path, [AllowEmptyCollection()][string[]]$Lines)
+    Write-Info $Path
+    foreach ($line in $Lines) { Write-Info "  $line" }
+    if (Test-DryRun (Get-UiText 'сохранение RSN.ini с резервной копией существующего файла' 'save RSN.ini with a backup of the existing file')) { return }
+    if (-not (Assert-Admin)) { return }
+    if (-not (Confirm-Action -Question (Get-UiText 'Сохранить список серверов в RSN.ini?' 'Save the server list to RSN.ini?'))) { return }
+    $directory = Split-Path -Parent $Path
+    New-Item -ItemType Directory -Path $directory -Force -ErrorAction Stop | Out-Null
+    $temp = Join-Path $directory ('RSN-' + [guid]::NewGuid() + '.tmp')
+    try {
+        # UTF-8 without BOM, CRLF; File.Replace keeps an exact backup and commits atomically.
+        [IO.File]::WriteAllLines($temp, [string[]]$Lines, (New-Object Text.UTF8Encoding($false)))
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            $backup = $Path + '.' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.bak'
+            [IO.File]::Replace($temp, $Path, $backup)
+            Write-Ok (Get-UiText "Резервная копия: $backup" "Backup: $backup")
+        } else { [IO.File]::Move($temp, $Path) }
+        Write-Ok (Get-UiText 'RSN.ini сохранён. Список определяет видимость серверов в Revit, подключение не проверялось.' 'RSN.ini saved. The list controls server visibility in Revit; connectivity was not checked.')
+    } finally {
+        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Select-RsnVersion {
+    $versions = @(@(Get-DetectedRevitVersion) + @($Script:AcceleratorVersions) |
+        Where-Object { $_ -match '^20\d{2}$' } | Sort-Object -Unique -Descending)
+    $items = @()
+    for ($i = 0; $i -lt $versions.Count; $i++) {
+        $path = Get-RsnPath ([int]$versions[$i])
+        $status = if (Test-Path -LiteralPath $path -PathType Leaf) { 'RSN.ini' } else { Get-UiText 'создать RSN.ini' 'create RSN.ini' }
+        $items += [pscustomobject]@{ Key=[string]($i + 1); Title="Revit $($versions[$i]) / $status"; Desc=$path }
+    }
+    $items += [pscustomobject]@{ Key='m'; Title=(Get-UiText 'Другая версия' 'Other version'); Desc='2000-2099' }
+    $choice = Show-Menu $items -Title (Get-UiText 'Версия для RSN.ini' 'RSN.ini version') -BackText (Get-UiText 'Назад' 'Back')
+    if ($choice -eq '0') { return $null }
+    if ($choice -eq 'm') {
+        $raw = Read-Text -Label (Get-UiText 'Год версии Revit (Enter — отмена)' 'Revit version year (Enter to cancel)')
+        if ($raw -match '^20\d{2}$') { return [int]$raw }
+        Write-Warn (Get-UiText 'Версия должна содержать четыре цифры: 2000–2099.' 'Version must be four digits: 2000–2099.')
+        return $null
+    }
+    return [int]$versions[[int]$choice - 1]
+}
+
+function Select-RsnAddress {
+    $known = @()
+    $root = Join-Path $env:ProgramData 'Autodesk'
+    foreach ($folder in @(Get-ChildItem -LiteralPath $root -Directory -Filter 'Revit Server 20*' -ErrorAction SilentlyContinue)) {
+        $file = Join-Path $folder.FullName 'Config\RSN.ini'
+        $known += @(Get-RsnEntries @(Get-RsnLines $file) | Where-Object { Test-RsnAddress $_.Address } | ForEach-Object { $_.Address })
+    }
+    $known = @($known | Sort-Object -Unique)
+    if ($known.Count) {
+        $items = @([pscustomobject]@{ Key='m'; Title=(Get-UiText 'Ввести новый адрес' 'Enter a new address'); Desc=(Get-UiText 'Имя сервера или IP' 'Server name or IP') })
+        for ($i = 0; $i -lt $known.Count; $i++) {
+            $items += [pscustomobject]@{ Key=[string]($i + 1); Title=$known[$i]; Desc=(Get-UiText 'Из существующих RSN.ini' 'From existing RSN.ini files') }
+        }
+        $choice = Show-Menu $items -Title (Get-UiText 'Выберите сервер или добавьте новый' 'Select a server or add a new one') -BackText (Get-UiText 'Отмена' 'Cancel')
+        if ($choice -eq '0') { return $null }
+        if ($choice -ne 'm') { return $known[[int]$choice - 1] }
+    }
+    while ($true) {
+        $address = Read-Text -Label (Get-UiText 'Адрес сервера (Enter — отмена)' 'Server address (Enter to cancel)') -Hint 'SRV-BIM01 / revit.company.local / 192.168.1.10'
+        if (-not $address) { return $null }
+        if (Test-RsnAddress $address) { return $address }
+        Write-Warn (Get-UiText 'Введите имя или IP без URL и порта; не более 63 символов, имя не начинается с подчёркивания.' 'Enter a name or IP without URL or port; at most 63 characters, name cannot start with an underscore.')
+    }
+}
+
+function Invoke-ModuleRsn {
+    $version = Select-RsnVersion
+    if (-not $version) { return }
+    while ($true) {
+        $path = Get-RsnPath $version
+        $items = @(
+            [pscustomobject]@{ Key='1'; Title=(Get-UiText 'Создать RSN.ini / добавить сервер' 'Create RSN.ini / add a server'); Desc=(Get-UiText 'Выбор известного сервера или ввод нового; существующие адреса сохраняются' 'Select a known server or enter a new one; existing addresses are preserved') },
+            [pscustomobject]@{ Key='2'; Title=(Get-UiText 'Редактировать адрес сервера' 'Edit a server address'); Desc=$path },
+            [pscustomobject]@{ Key='3'; Title=(Get-UiText 'Удалить адрес сервера' 'Remove a server address'); Desc=(Get-UiText 'Выбор записи из текущего списка' 'Select an entry from the current list') },
+            [pscustomobject]@{ Key='4'; Title=(Get-UiText 'Показать список серверов' 'Show server list'); Desc=$path },
+            [pscustomobject]@{ Key='5'; Title=(Get-UiText 'Выбрать другую версию' 'Select another version'); Desc="Revit $version" }
+        )
+        $choice = Show-Menu $items -Title "RSN.ini / Revit $version" -BackText (Get-UiText 'Назад' 'Back')
+        if ($choice -eq '0') { return }
+        if ($choice -eq '5') {
+            $selected = Select-RsnVersion
+            if ($selected) { $version = $selected }
+            continue
+        }
+        try {
+            $lines = @(Get-RsnLines $path)
+            $entries = @(Get-RsnEntries $lines)
+            if ($choice -eq '4') {
+                Write-Info $path
+                if (-not $entries.Count) { Write-Info (Get-UiText 'Список пуст или файл ещё не создан.' 'The list is empty or the file has not been created yet.') }
+                foreach ($entry in $entries) { Write-Kv ([string]($entry.Index + 1)) $entry.Address }
+            } elseif ($choice -eq '1') {
+                $address = Select-RsnAddress
+                if ($address) { Save-RsnLines $path @(Update-RsnLines -Lines $lines -Action Add -Address $address) }
+            } else {
+                if (-not $entries.Count) { Write-Info (Get-UiText 'Серверов для редактирования или удаления нет.' 'No servers to edit or remove.'); Wait-Menu; continue }
+                $servers = @()
+                for ($i = 0; $i -lt $entries.Count; $i++) {
+                    $servers += [pscustomobject]@{ Key=[string]($i + 1); Title=$entries[$i].Address; Desc=$path }
+                }
+                $selected = Show-Menu $servers -Title (Get-UiText 'Выберите сервер' 'Select a server') -BackText (Get-UiText 'Отмена' 'Cancel')
+                if ($selected -ne '0') {
+                    $entry = $entries[[int]$selected - 1]
+                    if ($choice -eq '3') { Save-RsnLines $path @(Update-RsnLines -Lines $lines -Action Remove -Index $entry.Index) }
+                    else {
+                        Write-Info (Get-UiText "Текущий адрес: $($entry.Address)" "Current address: $($entry.Address)")
+                        $address = Select-RsnAddress
+                        if ($address -and $address -ine $entry.Address) { Save-RsnLines $path @(Update-RsnLines -Lines $lines -Action Edit -Address $address -Index $entry.Index) }
+                    }
+                }
+            }
+        } catch { Write-Fail $_.Exception.Message }
+        Wait-Menu
+    }
+}
+
 function Invoke-SettingsMenu {
     while ($true) {
-        $dryText = if ($Script:Ctx.DryRun) { 'включён' } else { 'выключен' }
-        $yesText = if ($Script:Ctx.AssumeYes) { 'включён' } else { 'выключен' }
+        $dryText = if ($Script:Ctx.DryRun) { (Get-UiText 'включён' 'enabled') } else { (Get-UiText 'выключен' 'disabled') }
+        $yesText = if ($Script:Ctx.AssumeYes) { (Get-UiText 'включён' 'enabled') } else { (Get-UiText 'выключен' 'disabled') }
 
         $items = @(
-            [pscustomobject]@{ Key = '1'; Title = "Сухой прогон: $dryText"; Desc = 'Ничего не удаляется и не изменяется, только показывается план' },
-            [pscustomobject]@{ Key = '2'; Title = "Без подтверждений: $yesText"; Desc = 'Опасно: операции выполняются сразу' },
-            [pscustomobject]@{ Key = '3'; Title = 'Открыть папку логов'; Desc = $(if ($Script:Ctx.LogPath) { Split-Path $Script:Ctx.LogPath -Parent } else { 'лог не пишется' }) }
+            [pscustomobject]@{ Key = '1'; Title = (Get-UiText "Сухой прогон: $dryText" "Dry run: $dryText"); Desc = (Get-UiText 'Ничего не удаляется и не изменяется, только показывается план' 'Shows the plan without deleting or changing anything') },
+            [pscustomobject]@{ Key = '2'; Title = (Get-UiText "Без подтверждений: $yesText" "No confirmations: $yesText"); Desc = (Get-UiText 'Опасно: операции выполняются сразу' 'Warning: operations run immediately') },
+            [pscustomobject]@{ Key = '3'; Title = (Get-UiText 'Открыть папку логов' 'Open log folder'); Desc = $(if ($Script:Ctx.LogPath) { Split-Path $Script:Ctx.LogPath -Parent } else { (Get-UiText 'лог не пишется' 'logging unavailable') }) },
+            [pscustomobject]@{ Key = '4'; Title = (Get-UiText 'Язык интерфейса: Русский' 'Interface language: English'); Desc = 'Русский / English' }
         )
 
-        $choice = Show-Menu -Items $items -Title 'настройки сессии' -BackText 'Назад'
+        $choice = Show-Menu -Items $items -Title (Get-UiText 'настройки сессии' 'session settings') -BackText (Get-UiText 'Назад' 'Back')
         switch ($choice) {
             '0' { return }
             '1' { $Script:Ctx.DryRun = -not $Script:Ctx.DryRun }
@@ -2608,8 +2840,8 @@ function Invoke-SettingsMenu {
                 if (-not $Script:Ctx.AssumeYes) {
                     Write-Banner
                     Write-Blank
-                    Write-Warn 'Режим без подтверждений выполняет удаление сразу, без вопросов.'
-                    if (Confirm-Action -Question 'Точно включить?' -Danger) { $Script:Ctx.AssumeYes = $true }
+                    Write-Warn (Get-UiText 'Режим без подтверждений выполняет удаление сразу, без вопросов.' 'No-confirmation mode deletes immediately without asking.')
+                    if (Confirm-Action -Question (Get-UiText 'Точно включить?' 'Enable this mode?') -Danger) { $Script:Ctx.AssumeYes = $true }
                 }
                 else { $Script:Ctx.AssumeYes = $false }
             }
@@ -2618,6 +2850,7 @@ function Invoke-SettingsMenu {
                     Start-Process explorer.exe (Split-Path $Script:Ctx.LogPath -Parent)
                 }
             }
+            '4' { Select-UiLanguage }
         }
     }
 }
@@ -2633,27 +2866,29 @@ function Invoke-ModuleByKey {
         'clean'    { Invoke-ModuleClean }
         'backups'  { Invoke-ModuleBackups }
         'autodesk' { Invoke-ModuleAutodesk }
+        'rsn'      { Invoke-ModuleRsn }
     }
 }
 
 function Invoke-MainMenu {
+    while ($true) {
     $items = @(
-        [pscustomobject]@{ Key = '1'; Title = 'Сводка окружения'; Desc = 'Revit, Revit Server, службы, акселераторы, IIS' },
-        [pscustomobject]@{ Key = '2'; Title = 'IIS для Revit Server'; Desc = 'Роли Windows Server, ASP.NET 4.8, WCF HTTP/TCP, IIS 6 compat' },
-        [pscustomobject]@{ Key = '3'; Title = 'maxBytesPerRead'; Desc = 'web.config Revit Server: 102400 / 4096 / своё значение' },
-        [pscustomobject]@{ Key = '4'; Title = 'Revit Server Accelerator'; Desc = 'Переменные RSACCELERATOR2018-2026' },
-        [pscustomobject]@{ Key = '5'; Title = 'Очистка Revit'; Desc = 'Следы установки, реестр, AdskLicensing' },
-        [pscustomobject]@{ Key = '6'; Title = 'Backup-папки и журналы'; Desc = 'Поиск *_backup с парным .rvt, старые журналы, CSV-отчёт' },
-        [pscustomobject]@{ Key = '7'; Title = 'Autodesk: Defender и сеть'; Desc = 'Исключения, откат, сетевые блокировки, FAB' },
-        [pscustomobject]@{ Key = '9'; Title = 'Настройки сессии'; Desc = 'Сухой прогон, подтверждения, логи' }
+        [pscustomobject]@{ Key = '1'; Title = (Get-UiText 'Сводка окружения' 'environment overview'); Desc = (Get-UiText 'Revit, Revit Server, службы, акселераторы, IIS' 'Revit, Revit Server, services, accelerators, IIS') },
+        [pscustomobject]@{ Key = '2'; Title = (Get-UiText 'IIS для Revit Server' 'IIS for Revit Server'); Desc = (Get-UiText 'Роли Windows Server, ASP.NET 4.8, WCF HTTP/TCP, IIS 6 compat' 'Windows Server roles, ASP.NET 4.8, WCF HTTP/TCP, IIS 6 compatibility') },
+        [pscustomobject]@{ Key = '3'; Title = 'maxBytesPerRead'; Desc = (Get-UiText 'web.config Revit Server: 102400 / 4096 / своё значение' 'Revit Server web.config: 102400 / 4096 / custom value') },
+        [pscustomobject]@{ Key = '4'; Title = 'Revit Server Accelerator'; Desc = (Get-UiText 'Переменные RSACCELERATOR2018-2026' 'RSACCELERATOR2018-2026 variables') },
+        [pscustomobject]@{ Key = '5'; Title = (Get-UiText 'Очистка Revit' 'Revit cleanup'); Desc = (Get-UiText 'Следы установки, реестр, AdskLicensing' 'Installation remnants, registry, AdskLicensing') },
+        [pscustomobject]@{ Key = '6'; Title = (Get-UiText 'Backup-папки и журналы' 'Backup folders and journals'); Desc = (Get-UiText 'Поиск *_backup с парным .rvt, старые журналы, CSV-отчёт' 'Find *_backup with a matching .rvt, old journals, CSV report') },
+        [pscustomobject]@{ Key = '7'; Title = (Get-UiText 'Autodesk: Defender и сеть' 'Autodesk: Defender and network'); Desc = (Get-UiText 'Исключения, откат, сетевые блокировки, FAB' 'Exclusions, rollback, network blocks, FAB') },
+        [pscustomobject]@{ Key = '8'; Title = (Get-UiText 'Серверы Revit / RSN.ini' 'Revit servers / RSN.ini'); Desc = (Get-UiText 'Создание, добавление, редактирование и удаление адресов' 'Create, add, edit and remove server addresses') },
+        [pscustomobject]@{ Key = '9'; Title = (Get-UiText 'Настройки сессии' 'session settings'); Desc = (Get-UiText 'Сухой прогон, подтверждения, логи' 'Dry run, confirmations, logs') }
     )
 
     $map = @{
-        '1' = 'status'; '2' = 'iis'; '3' = 'maxbytes'; '4' = 'accel'; '5' = 'clean'; '6' = 'backups'; '7' = 'autodesk'
+        '1' = 'status'; '2' = 'iis'; '3' = 'maxbytes'; '4' = 'accel'; '5' = 'clean'; '6' = 'backups'; '7' = 'autodesk'; '8' = 'rsn'
     }
 
-    while ($true) {
-        $choice = Show-Menu -Items $items -Title 'что делаем' -BackText 'Выход'
+        $choice = Show-Menu -Items $items -Title (Get-UiText 'что делаем' 'choose an action') -BackText (Get-UiText 'Выход' 'Exit')
 
         if ($choice -eq '0') { return }
         if ($choice -eq '9') { Invoke-SettingsMenu; continue }
@@ -2661,7 +2896,7 @@ function Invoke-MainMenu {
             try { Invoke-ModuleByKey -Key $map[$choice] }
             catch {
                 Write-Blank
-                Write-Fail "Непредвиденная ошибка: $($_.Exception.Message)"
+                Write-Fail (Get-UiText "Непредвиденная ошибка: $($_.Exception.Message)" "Unexpected error: $($_.Exception.Message)")
                 Write-Log "FATAL $($_.Exception.ToString())"
                 Wait-Menu
             }
@@ -2678,6 +2913,7 @@ $Script:Ctx.Vt = Enable-VirtualTerminal
 Initialize-Palette
 $Script:Ctx.IsAdmin = Test-IsAdministrator
 Initialize-Log
+Initialize-UiLanguage
 
 Write-Log "$Script:AppName v$Script:AppVersion started"
 Write-Log "host=$env:COMPUTERNAME user=$env:USERNAME admin=$($Script:Ctx.IsAdmin) dryrun=$($Script:Ctx.DryRun) ps=$($PSVersionTable.PSVersion)"
@@ -2691,14 +2927,14 @@ try {
         Invoke-MainMenu
         Write-Banner
         Write-Blank
-        Write-Bullet 'Сессия завершена.'
-        if ($Script:Ctx.LogPath) { Write-Info "Лог: $($Script:Ctx.LogPath)" }
+        Write-Bullet (Get-UiText 'Сессия завершена.' 'Session ended.')
+        if ($Script:Ctx.LogPath) { Write-Info (Get-UiText "Лог: $($Script:Ctx.LogPath)" "Log: $($Script:Ctx.LogPath)") }
         Write-Blank
     }
 }
 catch {
     Write-Blank
-    Write-Fail "Критическая ошибка: $($_.Exception.Message)"
+    Write-Fail (Get-UiText "Критическая ошибка: $($_.Exception.Message)" "Critical error: $($_.Exception.Message)")
     Write-Log "FATAL $($_.Exception.ToString())"
     exit 1
 }
