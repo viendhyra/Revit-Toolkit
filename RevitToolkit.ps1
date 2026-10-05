@@ -3031,7 +3031,7 @@ function Test-AutodeskDownloadUri {
 function Get-ToolkitComponentAsset {
     param([ValidateSet('Identity', 'NLM', 'FAB')][string]$Component)
     $assets = @{
-        Identity = @{ Name='AdskIdentityManager-1.12.0-Installer.exe'; Sha256='15ed723753078615a3b545b09f6ed39f20eefce08a66b38a4c5f7e2026c17b8b'; Version='1.12.0' }
+        Identity = @{ Name='AdskIdentityManager-1.21.0.9-UCT-Installer.exe'; Sha256='c0209ba50ca088849a6cbae5e9da33486d86b1bc6b14d228786c689ce5bdc6bd'; Version='1.21.0.9' }
         NLM = @{ Name='nlm11.19.9.0_ipv4_ipv6_win64.msi'; Sha256='fc54f6e88f569c5c32df7e65a58a04307d39c2852465fa91cc4ce16a3ad43af7'; Version='11.19.9.0' }
         FAB = @{ Name='fab.zip'; Sha256='278baecab6ce9d729425e5cd0aec0294f2ce5803342afc8328e4c7ae69a8dbfd'; Version='1.9' }
     }

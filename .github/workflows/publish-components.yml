@@ -1,0 +1,47 @@
+name: Publish verified components
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-components.yml']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-components-2026-10-05
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download, verify and publish packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packages = @(
+            @{ Name='AdskIdentityManager-1.21.0.9-UCT-Installer.exe'; Url='https://up.autodesk.com/Windows/1.21.0.9/AdskIdentityManager-UCT-Installer.exe'; Hash='c0209ba50ca088849a6cbae5e9da33486d86b1bc6b14d228786c689ce5bdc6bd'; Autodesk=$true },
+            @{ Name='nlm11.19.9.0_ipv4_ipv6_win64.msi'; Url='https://damassets.autodesk.net/content/dam/autodesk/www/files/nlm11.19.9.0_ipv4_ipv6_win64.msi'; Hash='fc54f6e88f569c5c32df7e65a58a04307d39c2852465fa91cc4ce16a3ad43af7'; Autodesk=$true },
+            @{ Name='fab.zip'; Url='https://www.sordum.org/files/downloads.php?firewall-app-blocker'; Hash='278baecab6ce9d729425e5cd0aec0294f2ce5803342afc8328e4c7ae69a8dbfd'; Autodesk=$false }
+          )
+          foreach ($package in $packages) {
+            Invoke-WebRequest -Uri $package.Url -OutFile $package.Name -ErrorAction Stop
+            if ((Get-FileHash $package.Name -Algorithm SHA256).Hash -ine $package.Hash) { throw "SHA256 mismatch: $($package.Name)" }
+            if ($package.Autodesk) {
+              $signature = Get-AuthenticodeSignature $package.Name
+              if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?i)(?:^|,\s*)O="?Autodesk(?:,?\s+Inc\.?)?"?(?:,|$)') { throw "Invalid Autodesk signature: $($package.Name)" }
+            }
+          }
+          $notes = "Identity Manager 1.21.0 (build 1.21.0.9), Network License Manager 11.19.9.0 and portable FAB 1.9. Official vendor packages, verified SHA256; Autodesk installers also verified by Authenticode. The toolkit downloads individual packages on demand. FAB is extracted and opened; Autodesk installers use their official installation UI."
+          $notes | Set-Content -LiteralPath release-notes.txt -Encoding utf8
+          $files = @($packages | ForEach-Object { $_.Name })
+          gh release create components-2026-10-05 @files --draft --target $env:GITHUB_SHA --title 'Revit Toolkit components' --notes-file release-notes.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Release creation or asset upload failed' }
+          gh release edit components-2026-10-05 --draft=false
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
