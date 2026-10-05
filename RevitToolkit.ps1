@@ -2443,7 +2443,18 @@ function Start-Fab {
     $fab = Get-ChildItem -LiteralPath $ScriptRoot -Directory -Filter 'Fab*' -ErrorAction SilentlyContinue |
         ForEach-Object { Join-Path $_.FullName $exe } |
         Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-    if (-not $fab) { Write-AutodeskLog (Get-UiText "Fab не найден: ожидается папка 'Fab*\$exe' рядом со скриптом." "Fab not found: expected folder 'Fab*\$exe' next to the script.") WARN; return }
+    if (-not $fab) {
+        if (Test-DryRun (Get-UiText 'скачивание FAB из GitHub Releases и распаковка' 'download FAB from GitHub Releases and extract')) { return }
+        if (-not (Assert-Admin)) { return }
+        if (-not (Confirm-Action -Question (Get-UiText 'Скачать и открыть FAB из GitHub Releases?' 'Download and open FAB from GitHub Releases?'))) { return }
+        $package = Get-ToolkitComponentPackage FAB
+        if (-not $package) { return }
+        $folder = Join-Path (Split-Path -Parent $package) 'extracted'
+        if (-not (Test-Path -LiteralPath $folder)) { Expand-Archive -LiteralPath $package -DestinationPath $folder -ErrorAction Stop }
+        $fab = Join-Path $folder ('fab\' + $exe)
+        $expected = if ($exe -eq 'Fab_x64.exe') { 'b22d955115f4142198a288550d3592927b1b9460' } else { 'd11b74adf1ad35dd6df0f57004e287859f021a29' }
+        if (-not (Test-Path -LiteralPath $fab -PathType Leaf) -or (Get-FileHash -LiteralPath $fab -Algorithm SHA1).Hash -ine $expected) { throw 'FAB executable hash mismatch' }
+    }
     if (Test-DryRun (Get-UiText "запуск FAB: $fab" "launch FAB: $fab")) { return }
     if (-not (Assert-Admin)) { return }
     Start-Process -FilePath $fab -WorkingDirectory (Split-Path -Parent $fab)
@@ -2602,6 +2613,47 @@ function Invoke-Remove {
 }
 
 
+function Export-AntivirusExclusionList {
+    $targets = Get-ExclusionTargets
+    $paths = @($targets.Keys | Sort-Object)
+    foreach ($path in $paths) { Write-Info $path }
+    Write-Info (Get-UiText 'Список для ручного добавления в сторонний антивирус. Исключения сканирования и исключения обнаружений могут быть разными настройками.' 'List for manual addition to third-party antivirus. Scan exclusions and detection exclusions may be separate settings.')
+    if (Test-DryRun (Get-UiText 'экспорт путей Autodesk/Revit в TXT' 'export Autodesk/Revit paths to TXT')) { return }
+    $folder = Join-Path $Script:Root 'exports'
+    New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop | Out-Null
+    $file = Join-Path $folder ('Antivirus-exclusions-' + [guid]::NewGuid().ToString('N') + '.txt')
+    [IO.File]::WriteAllLines($file, [string[]]$paths, (New-Object Text.UTF8Encoding($true)))
+    Write-Ok $file
+}
+
+function Invoke-AntivirusMenu {
+    while ($true) {
+        $items = @(
+            [pscustomobject]@{ Key='1'; Title=(Get-UiText 'Состояние антивирусов' 'Antivirus status'); Desc=(Get-UiText 'Defender и зарегистрированные сторонние продукты' 'Defender and registered third-party products') },
+            [pscustomobject]@{ Key='2'; Title=(Get-UiText 'Временно выключить защиту Defender' 'Temporarily turn off Defender protection'); Desc=(Get-UiText 'Только проверка в реальном времени; Windows может включить её снова' 'Real-time protection only; Windows may enable it again') },
+            [pscustomobject]@{ Key='3'; Title=(Get-UiText 'Включить защиту Defender' 'Turn on Defender protection'); Desc=(Get-UiText 'Проверка в реальном времени' 'Real-time protection') },
+            [pscustomobject]@{ Key='4'; Title=(Get-UiText 'Исключения для стороннего антивируса' 'Exclusions for third-party antivirus'); Desc=(Get-UiText 'Экспорт путей Autodesk/Revit в TXT; добавление вручную' 'Export Autodesk/Revit paths to TXT; add manually') },
+            [pscustomobject]@{ Key='5'; Title=(Get-UiText 'Открыть Безопасность Windows' 'Open Windows Security'); Desc=(Get-UiText 'Настройки защиты и поставщики антивируса' 'Protection settings and antivirus providers') },
+            [pscustomobject]@{ Key='6'; Title=(Get-UiText 'Инструкция Kaspersky' 'Kaspersky instructions'); Desc=(Get-UiText 'Официальная справка по исключениям' 'Official exclusion documentation') },
+            [pscustomobject]@{ Key='7'; Title=(Get-UiText 'Инструкция ESET' 'ESET instructions'); Desc=(Get-UiText 'Официальная справка по исключениям сканирования и обнаружений' 'Official scan and detection exclusion documentation') }
+        )
+        $choice = Show-Menu -Items $items -Title (Get-UiText 'Антивирусы и исключения' 'Antivirus and exclusions') -BackText (Get-UiText 'Назад' 'Back')
+        if ($choice -eq '0') { return }
+        try {
+            switch ($choice) {
+                '1' { Show-AntivirusStatus }
+                '2' { Set-ToolkitDefenderRealtime -Enabled $false }
+                '3' { Set-ToolkitDefenderRealtime -Enabled $true }
+                '4' { Export-AntivirusExclusionList }
+                '5' { if (-not (Test-DryRun 'windowsdefender://threat')) { Start-Process 'windowsdefender://threat' -ErrorAction Stop } }
+                '6' { if (-not (Test-DryRun 'Kaspersky help')) { Start-Process 'https://support.kaspersky.com/help/kaspersky/win21.5/en-us/227390.htm' -ErrorAction Stop } }
+                '7' { if (-not (Test-DryRun 'ESET help')) { Start-Process 'https://support.eset.com/en/kb2769-exclude-files-or-folders-from-scanning-in-eset-windows-home-products' -ErrorAction Stop } }
+            }
+        } catch { Write-Fail $_.Exception.Message }
+        Wait-Menu
+    }
+}
+
     $items = @(
         [pscustomobject]@{ Key='1'; Title=(Get-UiText 'Все Autodesk/Revit: добавить исключения' 'All Autodesk/Revit: add exclusions'); Desc=(Get-UiText 'Все файлы и подпапки найденных каталогов, включая Network License Manager' 'All files and subfolders of discovered folders, including Network License Manager') },
         [pscustomobject]@{ Key='2'; Title=(Get-UiText 'Проверить исключения' 'Check exclusions'); Desc=(Get-UiText 'Найденные, отсутствующие и сторонние исключения' 'Present, missing and other exclusions') },
@@ -2615,7 +2667,8 @@ function Invoke-Remove {
         [pscustomobject]@{ Key='b'; Title=(Get-UiText 'Все Autodesk: удалить блокировки' 'All Autodesk: remove blocks'); Desc=(Get-UiText 'Только правила утилиты' 'Only rules owned by the utility') },
         [pscustomobject]@{ Key='n'; Title=(Get-UiText 'Network License Manager: блокировать сеть' 'Network License Manager: block network'); Desc=(Get-UiText 'Только EXE этой папки; исходящий трафик, все профили' 'Only EXEs in this folder; outbound traffic, all profiles') },
         [pscustomobject]@{ Key='u'; Title=(Get-UiText 'Network License Manager: удалить блокировку' 'Network License Manager: remove block'); Desc=(Get-UiText 'Только правила этого модуля; Revit не изменяется' 'Only this module''s rules; Revit is unchanged') },
-        [pscustomobject]@{ Key='f'; Title=(Get-UiText 'Открыть Firewall App Blocker' 'Open Firewall App Blocker'); Desc=(Get-UiText 'Необязательно: папка Fab* рядом со скриптом' 'Optional: Fab* folder next to the script') }
+        [pscustomobject]@{ Key='f'; Title=(Get-UiText 'Открыть Firewall App Blocker' 'Open Firewall App Blocker'); Desc=(Get-UiText 'Необязательно: папка Fab* рядом со скриптом' 'Optional: Fab* folder next to the script') },
+        [pscustomobject]@{ Key='v'; Title=(Get-UiText 'Антивирусы и управление защитой' 'Antivirus and protection controls'); Desc=(Get-UiText 'Состояние, временное отключение Defender, сторонние исключения' 'Status, temporary Defender disable, third-party exclusions') }
     )
     while ($true) {
         $choice = Show-Menu -Items $items -Title (Get-UiText 'Autodesk: Defender и сеть' 'Autodesk: Defender and network') -BackText (Get-UiText 'Назад' 'Back')
@@ -2635,10 +2688,39 @@ function Invoke-Remove {
                 'n' { Set-NlmInternet $true }
                 'u' { Set-NlmInternet $false }
                 'f' { Start-Fab }
+                'v' { Invoke-AntivirusMenu }
             }
         } catch { Write-AutodeskLog $_.Exception.Message ERROR }
         Wait-Menu
     }
+}
+
+function Show-AntivirusStatus {
+    try {
+        $status = Get-MpComputerStatus -ErrorAction Stop
+        Write-Info "Microsoft Defender: AntivirusEnabled=$($status.AntivirusEnabled); RealTimeProtectionEnabled=$($status.RealTimeProtectionEnabled); IsTamperProtected=$($status.IsTamperProtected); AMRunningMode=$($status.AMRunningMode)"
+    } catch { Write-Warn (Get-UiText "Состояние Defender недоступно: $($_.Exception.Message)" "Defender status unavailable: $($_.Exception.Message)") }
+    try {
+        $products = @(Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName AntiVirusProduct -ErrorAction Stop)
+        foreach ($product in $products) { Write-Info (Get-UiText "Зарегистрирован: $($product.displayName)" "Registered: $($product.displayName)") }
+        if (-not $products.Count) { Write-Info (Get-UiText 'Зарегистрированные антивирусы не найдены.' 'No registered antivirus products found.') }
+    } catch { Write-Warn (Get-UiText 'Список поставщиков недоступен. На Windows Server SecurityCenter2 может отсутствовать.' 'Provider list unavailable. SecurityCenter2 may be absent on Windows Server.') }
+}
+
+function Set-ToolkitDefenderRealtime {
+    param([bool]$Enabled)
+    $action = if ($Enabled) { Get-UiText 'включить защиту Defender в реальном времени' 'enable Defender real-time protection' } else { Get-UiText 'временно выключить защиту Defender в реальном времени' 'temporarily disable Defender real-time protection' }
+    if (Test-DryRun $action) { return }
+    if (-not (Assert-Admin)) { return }
+    $status = Get-MpComputerStatus -ErrorAction Stop
+    if (-not $Enabled -and $status.IsTamperProtected) { throw (Get-UiText 'Защита от изменений включена. Операция остановлена; скрипт не обходит её.' 'Tamper protection is enabled. Operation stopped; the script does not bypass it.') }
+    if (-not $status.AntivirusEnabled) { throw (Get-UiText 'Defender не активен как антивирус. Проверьте поставщика защиты и политики Windows.' 'Defender is not active as antivirus. Check the protection provider and Windows policies.') }
+    if (-not $Enabled) { Write-Warn (Get-UiText 'Новые файлы временно не будут проверяться в реальном времени. Windows может вернуть защиту; это не постоянное отключение.' 'New files will temporarily not be scanned in real time. Windows may restore protection; this is not a permanent disable.') }
+    if (-not (Confirm-Action -Question ($action + '?') -Danger:(-not $Enabled))) { return }
+    Set-MpPreference -DisableRealtimeMonitoring (-not $Enabled) -ErrorAction Stop
+    $after = Get-MpComputerStatus -ErrorAction Stop
+    if ([bool]$after.RealTimeProtectionEnabled -ne $Enabled) { throw (Get-UiText 'Windows не применила изменение. Проверьте защиту от изменений и политики организации.' 'Windows did not apply the change. Check tamper protection and organization policies.') }
+    Write-Ok $action
 }
 
 # RSN.ini lists Revit Server Hosts, one address per line (not INI sections).
@@ -2946,8 +3028,45 @@ function Test-AutodeskDownloadUri {
         ($uri.Host -eq 'autodesk.com' -or $uri.Host.EndsWith('.autodesk.com', [StringComparison]::OrdinalIgnoreCase)) -and -not $uri.UserInfo)
 }
 
+function Get-ToolkitComponentAsset {
+    param([ValidateSet('Identity', 'NLM', 'FAB')][string]$Component)
+    $assets = @{
+        Identity = @{ Name='AdskIdentityManager-1.12.0-Installer.exe'; Sha256='15ed723753078615a3b545b09f6ed39f20eefce08a66b38a4c5f7e2026c17b8b'; Version='1.12.0' }
+        NLM = @{ Name='nlm11.19.9.0_ipv4_ipv6_win64.msi'; Sha256='fc54f6e88f569c5c32df7e65a58a04307d39c2852465fa91cc4ce16a3ad43af7'; Version='11.19.9.0' }
+        FAB = @{ Name='fab.zip'; Sha256='278baecab6ce9d729425e5cd0aec0294f2ce5803342afc8328e4c7ae69a8dbfd'; Version='1.9' }
+    }
+    $asset = $assets[$Component]
+    return [pscustomobject]@{ Name=$asset.Name; Sha256=$asset.Sha256; Version=$asset.Version; Url=('https://github.com/viendhyra/Revit-Toolkit/releases/download/components-2026-10-05/' + $asset.Name) }
+}
+
+function Get-ToolkitComponentPackage {
+    param([ValidateSet('Identity', 'NLM', 'FAB')][string]$Component)
+    if (Test-DryRun (Get-UiText "скачивание $Component из GitHub Releases и проверка SHA256" "download $Component from GitHub Releases and verify SHA256")) { return $null }
+    $asset = Get-ToolkitComponentAsset $Component
+    Write-Info "$Component $($asset.Version)"
+    $folder = Join-Path $Script:Root ('components\' + $Component + '\' + $asset.Version)
+    $path = Join-Path $folder $asset.Name
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $asset.Sha256) {
+        New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop | Out-Null
+        $partial = Join-Path $folder ([guid]::NewGuid().ToString('N') + [IO.Path]::GetExtension($asset.Name))
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            Write-Info $asset.Url
+            Invoke-WebRequest -Uri $asset.Url -UseBasicParsing -OutFile $partial -ErrorAction Stop | Out-Null
+            if ((Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash -ine $asset.Sha256) { throw 'Component SHA256 mismatch' }
+            if ($Component -ne 'FAB') { Assert-AutodeskInstaller $partial }
+            Move-Item -LiteralPath $partial -Destination $path -Force -ErrorAction Stop
+        } finally {
+            if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force -ErrorAction Stop }
+        }
+    }
+    if ($Component -ne 'FAB') { Assert-AutodeskInstaller $path }
+    return $path
+}
+
 function Get-AutodeskComponentPage {
-    param([ValidateSet('Licensing', 'Identity')][string]$Component)
+    param([ValidateSet('Licensing', 'Identity', 'NLM')][string]$Component)
+    if ($Component -eq 'NLM') { return 'https://www.autodesk.com/support/technical/article/caas/tsarticles/ts/EB0JPJWkEgBXjZRPBONh1.html' }
     if ($Component -eq 'Licensing') { return 'https://www.autodesk.com/support/technical/article/caas/tsarticles/ts/f5IhBc15i0kOwzBb8lcEN.html' }
     return 'https://www.autodesk.com/support/technical/article/caas/tsarticles/ts/7zbgTemIhA3ltRs4eACL0g.html'
 }
@@ -2969,18 +3088,27 @@ function Assert-AutodeskInstaller {
 }
 
 function Get-AutodeskComponentInstaller {
-    param([ValidateSet('Licensing', 'Identity')][string]$Component)
+    param([ValidateSet('Licensing', 'Identity', 'NLM')][string]$Component)
     $page = Get-AutodeskComponentPage $Component
     Write-Info $page
-    $choice = Read-Text -Label (Get-UiText 'Источник: 1 — скачать с Autodesk, 2 — локальный EXE, Enter — отмена' 'Source: 1 — download from Autodesk, 2 — local EXE, Enter to cancel')
+    $choice = Read-Text -Label (Get-UiText 'Источник: 1 — Autodesk, 2 — локальный EXE/MSI, 3 — GitHub Releases, Enter — отмена' 'Source: 1 — Autodesk, 2 — local EXE/MSI, 3 — GitHub Releases, Enter to cancel')
+    if ($choice -eq '3') {
+        if ($Component -eq 'Licensing') { throw (Get-UiText 'Licensing Service не включён в этот релиз. Выберите Autodesk или локальный EXE.' 'Licensing Service is not included in this release. Select Autodesk or local EXE.') }
+        return Get-ToolkitComponentPackage $Component
+    }
     if ($choice -eq '2') {
-        $path = (Read-Text -Label (Get-UiText 'Путь к официальному установщику EXE' 'Path to the official EXE installer')).Trim('"')
+        $path = (Read-Text -Label (Get-UiText 'Путь к официальному установщику EXE/MSI' 'Path to the official EXE/MSI installer')).Trim('"')
         if (-not $path) { return $null }
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or [IO.Path]::GetExtension($path) -ine '.exe') { throw 'Installer EXE not found' }
+        $extension = if ($Component -eq 'NLM') { '.msi' } else { '.exe' }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or [IO.Path]::GetExtension($path) -ine $extension) { throw "Installer $extension not found" }
         Assert-AutodeskInstaller $path
         return (Get-Item -LiteralPath $path).FullName
     }
     if ($choice -ne '1') { return $null }
+    if ($Component -eq 'NLM') {
+        Write-Info (Get-UiText 'Скачайте MSI со страницы Autodesk, затем выберите локальный файл; либо выберите GitHub Releases.' 'Download the MSI from the Autodesk page, then select the local file; or select GitHub Releases.')
+        return $null
+    }
     if (Test-DryRun (Get-UiText "скачивание $Component с Autodesk, распаковка и проверка подписи" "download $Component from Autodesk, extract and verify signature")) { return $null }
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $links = @()
@@ -3012,7 +3140,7 @@ function Get-AutodeskComponentInstaller {
 }
 
 function Invoke-AutodeskComponentInstall {
-    param([ValidateSet('Licensing', 'Identity')][string]$Component, [switch]$Reinstall)
+    param([ValidateSet('Licensing', 'Identity', 'NLM')][string]$Component, [switch]$Reinstall)
     if (Test-DryRun (Get-UiText "скачивание/выбор, проверка подписи и установка $Component; переустановка = $Reinstall" "download/select, verify signature and install $Component; reinstall = $Reinstall")) { return }
     if (-not (Assert-Admin)) { return }
     $installer = Get-AutodeskComponentInstaller $Component
@@ -3027,7 +3155,9 @@ function Invoke-AutodeskComponentInstall {
             if ($process.ExitCode -notin @(0, 3010)) { throw "Licensing uninstall failed: $($process.ExitCode)" }
         }
     }
-    $process = Start-Process -FilePath $installer -Wait -PassThru -ErrorAction Stop
+    if ($Component -eq 'NLM') {
+        $process = Start-Process -FilePath (Join-Path $env:WINDIR 'System32\msiexec.exe') -ArgumentList @('/i', ('"' + $installer + '"'), '/norestart') -Wait -PassThru -ErrorAction Stop
+    } else { $process = Start-Process -FilePath $installer -Wait -PassThru -ErrorAction Stop }
     if ($process.ExitCode -notin @(0, 3010, 1641)) { throw "Installer failed: $($process.ExitCode)" }
     Write-Ok (Get-UiText "Установщик завершён: $($process.ExitCode). Проверьте диагностику." "Installer completed: $($process.ExitCode). Check diagnostics.")
     if ($process.ExitCode -in @(3010, 1641)) { Write-Warn (Get-UiText 'Установщик сообщил о необходимости перезагрузки.' 'The installer reported a restart requirement.') }
@@ -3042,7 +3172,8 @@ function Invoke-ModuleLicense {
             [pscustomobject]@{ Key='4'; Title=(Get-UiText 'Скачать / установить Licensing Service' 'Download / install Licensing Service'); Desc=(Get-UiText 'Официальный установщик Autodesk или локальный EXE' 'Official Autodesk installer or local EXE') },
             [pscustomobject]@{ Key='5'; Title=(Get-UiText 'Скачать / установить Identity Manager' 'Download / install Identity Manager'); Desc=(Get-UiText 'Компонент входа для продуктов 2024 и новее' 'Sign-in component for products 2024 and newer') },
             [pscustomobject]@{ Key='6'; Title=(Get-UiText 'Переустановить Licensing Service' 'Reinstall Licensing Service'); Desc=(Get-UiText 'Сначала получить и проверить установщик, затем удалить старую службу' 'Obtain and verify the installer before removing the old service') },
-            [pscustomobject]@{ Key='7'; Title=(Get-UiText 'Открыть резервные копии' 'Open backups'); Desc=(Get-LicenseRepairRoot) }
+            [pscustomobject]@{ Key='7'; Title=(Get-UiText 'Открыть резервные копии' 'Open backups'); Desc=(Get-LicenseRepairRoot) },
+            [pscustomobject]@{ Key='8'; Title='Network License Manager'; Desc=(Get-UiText 'GitHub Releases или официальный MSI; перед обновлением удалите старую версию NLM' 'GitHub Releases or official MSI; remove the old NLM version before upgrading') }
         )
         $choice = Show-Menu $items -Title (Get-UiText 'Восстановление лицензирования Autodesk' 'Autodesk licensing repair') -BackText (Get-UiText 'Назад' 'Back')
         if ($choice -eq '0') { return }
@@ -3055,6 +3186,7 @@ function Invoke-ModuleLicense {
                 '5' { Invoke-AutodeskComponentInstall Identity }
                 '6' { Invoke-AutodeskComponentInstall Licensing -Reinstall }
                 '7' { $root = Get-LicenseRepairRoot; if (Test-Path -LiteralPath $root) { Start-Process explorer.exe -ArgumentList ('"' + $root + '"') } }
+                '8' { Invoke-AutodeskComponentInstall NLM }
             }
         } catch { Write-Fail $_.Exception.Message }
         Wait-Menu

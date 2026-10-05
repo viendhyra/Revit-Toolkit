@@ -137,6 +137,39 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\RevitToolkit.ps1 -Modu
 
 ## Параметры
 
+### Антивирусы / Antivirus
+
+Меню **7 — Autodesk: Defender и сеть → v — Антивирусы**:
+
+- Состояние Defender и названия антивирусов, зарегистрированных в Windows Security Center. На Windows Server список может быть недоступен.
+- Временное отключение и включение проверки Defender в реальном времени через `Set-MpPreference`, с подтверждением и проверкой результата. При включённой защите от изменений отключение останавливается. Политики организации могут запретить операцию. Постоянное отключение не реализовано: Windows может автоматически вернуть защиту.
+- Экспорт найденных каталогов Autodesk/Revit в TXT в папку `exports`. Добавьте пути в исключения стороннего антивируса вручную. TXT не является форматом импорта Kaspersky/ESET; исключения сканирования и обнаружений настраиваются отдельно, где это предусмотрено продуктом.
+- Открытие «Безопасность Windows» и официальных инструкций Kaspersky/ESET.
+
+English: **7 — Autodesk: Defender and network → v — Antivirus** provides Defender status, registered antivirus names, temporary real-time protection disable/enable, and a TXT list of Autodesk/Revit paths for manual third-party exclusions. It does not permanently disable Defender or bypass tamper protection. Third-party exclusions are not automatically applied. Scan and detection exclusions may require separate product settings.
+
+Microsoft documents [real-time protection and exclusions](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/virus-and-threat-protection-in-the-windows-security-app). See also [Kaspersky exclusions](https://support.kaspersky.com/help/kaspersky/win21.5/en-us/227390.htm) and [ESET scan/detection exclusions](https://support.eset.com/en/kb2769-exclude-files-or-folders-from-scanning-in-eset-windows-home-products).
+
+Offline check: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test-Antivirus.ps1`.
+
+### Компоненты из GitHub Releases / Components from GitHub Releases
+
+В модуле лицензирования: **5 — Identity Manager** или **8 — Network License Manager**, затем **3 — GitHub Releases**. Identity Manager закреплён на версии **1.12.0** из официального дистрибутива 3ds Max 2025.3; это не последняя версия. Для актуального Identity используйте источник Autodesk. NLM — **11.19.9.0**. Перед обновлением NLM удалите старую версию согласно инструкции Autodesk.
+
+FAB **1.9** автоматически предлагается скачать при запуске FAB, если локальная папка отсутствует. FAB портативный: архив распаковывается и открывается без отдельного установщика.
+
+Пакеты берутся из релиза `components-2026-10-05` репозитория `viendhyra/Revit-Toolkit`. Скрипт проверяет закреплённый SHA256, для Identity/NLM также действительную подпись Autodesk. Кэш — `<папка скрипта>\components`; повреждённый кэш скачивается заново. `-DryRun` ничего не скачивает и не устанавливает. Установка открывает официальный мастер; его результат проверяется.
+
+**Статус подготовки:** Identity и FAB сохранены локально; NLM пока не получен, релиз ещё не опубликован. До публикации загрузка из GitHub недоступна. Используйте официальный локальный установщик либо источник Autodesk.
+
+English: In Licensing repair, select **5 — Identity Manager** or **8 — Network License Manager**, then **3 — GitHub Releases**. Pinned versions: Identity **1.12.0** (older official package), NLM **11.19.9.0**, FAB **1.9**. Missing FAB is offered for download and portable extraction. All packages require the pinned SHA256; Autodesk installers additionally require a valid Autodesk signature. Dry run performs no downloads or installation. **Release publication is pending; Identity/FAB are prepared locally, NLM is still missing.**
+
+Подготовка публикации описана в [RELEASE-COMPONENTS.md](RELEASE-COMPONENTS.md). Проверки загрузчика без сети и установки:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test-Components.ps1
+```
+
 | Параметр | Назначение |
 |---|---|
 | `-Module <ключ>` | Запуск одного модуля, без главного меню |
