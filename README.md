@@ -149,6 +149,12 @@ English: **p — Personal Accelerator for Revit → 2 — Uninstall**, or `-Modu
 
 Offline check: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test-PersonalAccelerator.ps1`.
 
+Если Windows Installer запрашивает отсутствующий `PACR.msi`, закройте его диалог через **Cancel** и выберите **p → 3 — Нет PACR.msi: помощь Microsoft**. Скрипт покажет ProductCode и откроет официальную страницу средства исправления установки/удаления. Autodesk [рекомендует этот способ для отсутствующего PACR.msi](https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/PACR-msi-was-not-found-when-installing-Revit-Revit-LT-2024.html). Выберите **Uninstalling → Personal Accelerator for Revit**; другие продукты не выбирайте. Исправление регистрации не равно гарантированному удалению всех файлов. Microsoft предлагает отдельное средство для Windows 10; доступность на новых Windows 11 зависит от поддержки диагностического средства.
+
+Штатное удаление теперь использует `/qn` после подтверждения в терминале: MSI не открывает повторный запрос удаления или диалог поиска исходного файла. Ошибки отсутствующего источника 1612/1706 направляют к пункту 3; удаление не объявляется успешным.
+
+English: If the original `PACR.msi` is missing, select **p → 3** for official Microsoft recovery guidance and the installed ProductCode. Select only Personal Accelerator in the troubleshooter. Recovery may repair/remove registration without the source package, but does not guarantee full file cleanup. The separate Microsoft tool is documented for Windows 10 and may be unavailable on newer Windows 11. Normal uninstall uses `/qn` after terminal confirmation, so missing sources produce an error instead of an MSI source dialog.
+
 ### Антивирусы / Antivirus
 
 Меню **7 — Autodesk: Defender и сеть → v — Антивирусы**:

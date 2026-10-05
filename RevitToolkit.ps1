@@ -1282,19 +1282,33 @@ function Invoke-PersonalAcceleratorRemoval {
     $log = Join-Path $folder ('PersonalAccelerator-uninstall-' + [guid]::NewGuid().ToString('N') + '.log')
     $selected | ConvertTo-Json | Set-Content -LiteralPath ($log + '.json') -Encoding UTF8 -ErrorAction Stop
     Write-Info $log
-    $process = Start-Process -FilePath (Join-Path $env:WINDIR 'System32\msiexec.exe') -ArgumentList @('/x', $selected.ProductCode, '/norestart', '/L*v', ('"' + $log + '"')) -Wait -PassThru -ErrorAction Stop
+    Write-Info (Get-UiText 'Штатное удаление выполняется без диалогов MSI. Дождитесь результата; журнал указан выше.' 'Registered uninstall runs without MSI dialogs. Wait for the result; the log is shown above.')
+    $process = Start-Process -FilePath (Join-Path $env:WINDIR 'System32\msiexec.exe') -ArgumentList @('/x', $selected.ProductCode, '/norestart', '/qn', '/L*v', ('"' + $log + '"')) -Wait -PassThru -ErrorAction Stop
     if ($process.ExitCode -eq 1602) { Write-Warn (Get-UiText 'Удаление отменено в установщике.' 'Uninstallation was cancelled in the installer.'); return }
+    if ($process.ExitCode -in @(1612,1706)) { Write-Warn (Get-UiText "MSI не находит исходный PACR.msi. Удаление не завершено. Выберите пункт 3 — помощь Microsoft без исходного пакета. Журнал: $log" "MSI cannot find the original PACR.msi. Uninstall did not complete. Select option 3 — Microsoft recovery without the original package. Log: $log"); return }
     if ($process.ExitCode -notin @(0,3010,1641)) { throw "Personal Accelerator uninstall failed: $($process.ExitCode). Log: $log" }
     if ($process.ExitCode -in @(3010,1641)) { Write-Warn (Get-UiText 'Установщик сообщил о необходимости перезагрузки. После неё проверьте состояние компонента.' 'The installer reported a restart requirement. Check component status after restarting.'); return }
     if (@(Get-PersonalAcceleratorEntry | Where-Object { $_.ProductCode -eq $selected.ProductCode }).Count) { throw (Get-UiText "Запись компонента осталась после удаления. Проверьте MSI-журнал: $log" "Component registration remains after uninstall. Check MSI log: $log") }
     Write-Ok (Get-UiText 'Personal Accelerator удалён штатным установщиком. Revit, RSACCELERATOR и RSN.ini не изменялись скриптом.' 'Personal Accelerator was removed by Windows Installer. The script did not modify Revit, RSACCELERATOR or RSN.ini.')
 }
 
+function Show-PersonalAcceleratorRecovery {
+    foreach ($entry in @(Get-PersonalAcceleratorEntry)) { Write-Info "$($entry.DisplayName) / $($entry.DisplayVersion) / ProductCode=$($entry.ProductCode)" }
+    Write-Info (Get-UiText 'Закройте старый диалог MSI кнопкой Cancel. В средстве Microsoft выберите Uninstalling, затем только Personal Accelerator for Revit. Если его нет в списке, используйте показанный ProductCode.' 'Close the old MSI dialog using Cancel. In the Microsoft tool select Uninstalling, then only Personal Accelerator for Revit. If it is not listed, use the displayed ProductCode.')
+    Write-Warn (Get-UiText 'Исправление записи MSI не гарантирует удаления всех файлов компонента. После работы средства проверьте пункт 1. Кэш моделей и папки Revit вручную не удаляются.' 'Repairing MSI registration does not guarantee removal of every component file. After using the tool, check option 1. Model caches and Revit folders are not manually deleted.')
+    Write-Info (Get-UiText 'Microsoft описывает отдельное средство Program Install and Uninstall для Windows 10; на новых Windows 11 оно может быть недоступно. Используйте актуальные инструкции страницы.' 'Microsoft documents the separate Program Install and Uninstall tool for Windows 10; it may be unavailable on newer Windows 11. Follow the current instructions on the page.')
+    $url='https://support.microsoft.com/en-us/windows/deployment/install-upgrade/fix-problems-that-block-programs-from-being-installed-or-removed'
+    Write-Info $url
+    if (Test-DryRun (Get-UiText 'открытие официальной инструкции Microsoft; изменения не выполняются скриптом' 'open official Microsoft recovery instructions; the script makes no system changes')) { return }
+    Start-Process -FilePath $url -ErrorAction Stop
+}
+
 function Invoke-ModulePersonalAccelerator {
     while ($true) {
         $items = @(
             [pscustomobject]@{Key='1';Title=(Get-UiText 'Показать установленные версии' 'Show installed versions');Desc='Personal Accelerator for Revit'},
-            [pscustomobject]@{Key='2';Title=(Get-UiText 'Удалить Personal Accelerator' 'Uninstall Personal Accelerator');Desc=(Get-UiText 'Штатный MSI, проверка результата, журнал; без автоматической перезагрузки' 'Registered MSI, result verification, log; no automatic restart')}
+            [pscustomobject]@{Key='2';Title=(Get-UiText 'Удалить Personal Accelerator' 'Uninstall Personal Accelerator');Desc=(Get-UiText 'Штатный MSI, проверка результата, журнал; без автоматической перезагрузки' 'Registered MSI, result verification, log; no automatic restart')},
+            [pscustomobject]@{Key='3';Title=(Get-UiText 'Нет PACR.msi: помощь Microsoft' 'Missing PACR.msi: Microsoft recovery');Desc=(Get-UiText 'Официальное средство исправления MSI-записи; исходный пакет может не понадобиться' 'Official MSI registration recovery tool; the original package may not be needed')}
         )
         $choice = Show-Menu -Items $items -Title 'Personal Accelerator for Revit' -BackText (Get-UiText 'Назад' 'Back')
         if ($choice -eq '0') { return }
@@ -1302,6 +1316,7 @@ function Invoke-ModulePersonalAccelerator {
             switch ($choice) {
                 '1' { $entries=@(Get-PersonalAcceleratorEntry); if (-not $entries.Count) { Write-Info (Get-UiText 'Компонент не найден.' 'Component not found.') }; foreach ($entry in $entries) { Write-Info "$($entry.DisplayName) / $($entry.DisplayVersion) / $($entry.ProductCode)" } }
                 '2' { Invoke-PersonalAcceleratorRemoval }
+                '3' { Show-PersonalAcceleratorRecovery }
             }
         } catch { Write-Fail $_.Exception.Message }
         Wait-Menu
