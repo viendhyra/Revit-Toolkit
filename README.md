@@ -26,6 +26,8 @@
        Исключения, откат, сетевые блокировки, Network License Manager
     8  Серверы Revit / RSN.ini
        Создание файла, добавление, редактирование и удаление серверов
+    l  Восстановление лицензирования
+       Диагностика, резервные копии, скачивание и установка компонентов
     9  Настройки сессии
 
     0  Выход
@@ -77,7 +79,28 @@ powershell.exe -ExecutionPolicy Bypass -File .\RevitToolkit.ps1 -DryRun
 .\RevitToolkit.ps1 -Module status
 ```
 
-Ключи: `status`, `iis`, `maxbytes`, `accel`, `clean`, `backups`, `autodesk`, `rsn`.
+Ключи: `status`, `iis`, `maxbytes`, `accel`, `clean`, `backups`, `autodesk`, `rsn`, `license`.
+
+## Восстановление лицензирования Autodesk
+
+Пункт **l** (латинская L) или `-Module license`: функционал Autodesk License Repair с раздельными действиями и общим интерфейсом RU/EN.
+
+- Диагностика служб `AdskLicensingService` / `AdskNLM`, FLEX-переменных, каталогов Network License Manager, подписей и SHA256 файлов `version.dll` внутри AdskLicensing. DLL автоматически не удаляются.
+- Очистка службы `AdskNLM`, её ключей FLEXlm и записей `localhost`, `127.0.0.1`, `::1` в `ADSKFLEX_LICENSE_FILE` / `LM_LICENSE_FILE` (User/Machine/Process). Другие адреса и пути лицензий сохраняются. Это отдельное подтверждаемое действие: оно может отключить легитимный локальный сервер лицензий.
+- Сброс кэша входа только текущего пользователя: `LoginState.xml`, `idservices.db` и связанные WAL/SHM-файлы. Перед удалением — копия. После сброса потребуется войти заново.
+- Скачивание и установка официального **Autodesk Desktop Licensing Service** и **Autodesk Identity Manager**; отдельный режим переустановки Licensing Service. Обновление из модуля «Очистка Revit» использует тот же механизм.
+
+Скачивание ищет Windows EXE/ZIP на [странице Licensing Service](https://www.autodesk.com/support/technical/article/caas/tsarticles/ts/f5IhBc15i0kOwzBb8lcEN.html) или [странице Identity Manager](https://www.autodesk.com/support/technical/article/caas/tsarticles/ts/7zbgTemIhA3ltRs4eACL0g.html). Если страница недоступна, ссылка не найдена или вариантов несколько, можно вставить прямую официальную HTTPS-ссылку либо выбрать локальный EXE. Поддерживаются только домены Autodesk; перед запуском проверяется действительность Authenticode-подписи и издатель Autodesk. Пакеты сохраняются в `components` рядом со скриптом. Установщик открывается в обычном режиме; код завершения проверяется. Перед переустановкой старого Licensing Service новый установщик уже должен быть получен и проверен.
+
+Резервные копии: `%ProgramData%\RevitToolkit\LicenseRepair\<дата>-<идентификатор>`. Сохраняются FLEX-переменные в JSON и существующие ключи AdskNLM в `.reg`; временные папки AdskNLM переносятся в резервную папку. Автоматического полного отката нет: резервные файлы предназначены для ручного восстановления. Ошибка создания резервной копии останавливает очистку.
+
+Для изменений нужны права администратора и подтверждение. `-DryRun` не скачивает, не устанавливает и не создаёт резервных копий — только показывает план. Закройте приложения Autodesk перед восстановлением и установкой. Скрипт не отключает сетевые блокировки автоматически; ранее созданные правила могут мешать лицензированию и входу.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\RevitToolkit.ps1 -Module license -DryRun
+```
+
+Проверка без изменения ПК: `powershell.exe -NoProfile -File .\Test-LicenseRepair.ps1`.
 
 ## Серверы Revit / RSN.ini
 

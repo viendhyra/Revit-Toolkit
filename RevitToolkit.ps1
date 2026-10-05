@@ -14,7 +14,7 @@
       6. Сводка окружения (что установлено, что настроено)
 
 .PARAMETER Module
-    Запуск конкретного модуля без меню: status | iis | maxbytes | accel | clean | backups | autodesk | rsn
+    Запуск конкретного модуля без меню: status | iis | maxbytes | accel | clean | backups | autodesk | rsn | license
 
 .PARAMETER DryRun
     Сухой прогон: всё ищется и показывается, но ничего не удаляется и не меняется.
@@ -44,7 +44,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('', 'status', 'iis', 'maxbytes', 'accel', 'clean', 'backups', 'autodesk', 'rsn')]
+    [ValidateSet('', 'status', 'iis', 'maxbytes', 'accel', 'clean', 'backups', 'autodesk', 'rsn', 'license')]
     [string]$Module = '',
 
     [ValidateSet('', 'ru', 'en')]
@@ -1582,71 +1582,14 @@ function Get-AdskLicensingVersionText {
     return (Get-UiText 'не найдено' 'not found')
 }
 
-function Get-AdskLicensingInstaller {
-    return @(Get-ChildItem -LiteralPath $Script:Root -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '^AdskLicensing-installer .*\.exe$' } |
-        Sort-Object {
-            if ($_.BaseName -match '(\d+\.\d+\.\d+\.\d+)') { [version]$matches[1] } else { [version]'0.0.0.0' }
-        } -Descending)
-}
+
 
 function Invoke-AdskLicensingUpdate {
     Write-Banner
     Write-Prompt (Get-UiText 'обновление Autodesk Licensing Service' 'update Autodesk Licensing Service')
     Write-LogHeader 'ADSK LICENSING'
-
-    if (-not (Assert-Admin -Reason (Get-UiText 'Переустановка службы лицензирования требует прав администратора.' 'Reinstalling the licensing service requires administrator privileges.'))) { Wait-Menu; return }
-
-    $installers = @(Get-AdskLicensingInstaller)
-    Write-Blank
-    Write-Kv (Get-UiText 'Текущая версия' 'Current version') (Get-AdskLicensingVersionText)
-
-    if ($installers.Count -eq 0) {
-        Write-Blank
-        Write-Fail (Get-UiText 'Установщик не найден.' 'Installer not found.')
-        Write-Info (Get-UiText "Положите файл вида 'AdskLicensing-installer 11.x.x.x.exe' рядом со скриптом:" "Place a file named 'AdskLicensing-installer 11.x.x.x.exe' next to the script:")
-        Write-Info $Script:Root
-        Wait-Menu
-        return
-    }
-
-    $installer = $installers[0]
-    Write-Kv (Get-UiText 'Установщик' 'Installer') $installer.Name
-
-    Write-Blank
-    if (Test-DryRun (Get-UiText 'остановка службы, удаление старой версии, установка новой' 'stop service, remove old version, install new version')) { Wait-Menu; return }
-    if (-not (Confirm-Action -Question (Get-UiText 'Переустановить AdskLicensing?' 'Reinstall AdskLicensing?') -Danger)) { Write-Info (Get-UiText 'Отменено.' 'Cancelled.'); Wait-Menu; return }
-
-    Write-Blank
-    Invoke-Step -Text 'stop AdskLicensingService' -Action {
-        Get-Service -Name 'AdskLicensingService' -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue
-        Get-Process -Name 'AdskLicensingService', 'AdskLicensingAgent', 'AdskLicensingInstHelper' -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-    } | Out-Null
-
-    $uninstallers = @(
-        'C:\Program Files (x86)\Common Files\Autodesk Shared\AdskLicensing\uninstall.exe',
-        'C:\Program Files (x86)\Common Files\Autodesk Shared\AdskLicensing\Current\AdskLicensingService\uninstall.exe'
-    ) | Where-Object { Test-Path -LiteralPath $_ }
-
-    foreach ($uninstaller in $uninstallers) {
-        Invoke-Step -Text "uninstall $(Split-Path $uninstaller -Parent | Split-Path -Leaf)" -Action {
-            $process = Start-Process -FilePath $uninstaller -ArgumentList '--mode unattended' -Wait -PassThru -ErrorAction Stop
-            Write-Log "     exit code $($process.ExitCode)"
-        } | Out-Null
-    }
-
-    Invoke-Step -Text "install $($installer.Name)" -Action {
-        $process = Start-Process -FilePath $installer.FullName -ArgumentList '--mode unattended' -Wait -PassThru -ErrorAction Stop
-        Write-Log "     exit code $($process.ExitCode)"
-    } | Out-Null
-
-    Invoke-Step -Text 'start AdskLicensingService' -Action {
-        Get-Service -Name 'AdskLicensingService' -ErrorAction SilentlyContinue | Start-Service -ErrorAction SilentlyContinue
-    } | Out-Null
-
-    Write-Blank
-    Write-Ok (Get-UiText "Новая версия: $(Get-AdskLicensingVersionText)" "New version: $(Get-AdskLicensingVersionText)")
+    try { Invoke-AutodeskComponentInstall Licensing -Reinstall }
+    catch { Write-Fail $_.Exception.Message }
     Wait-Menu
 }
 
@@ -1751,7 +1694,7 @@ function Invoke-ModuleClean {
     while ($true) {
         $items = @(
             [pscustomobject]@{ Key = '1'; Title = (Get-UiText 'Поиск и удаление следов Revit' 'Find and remove Revit remnants'); Desc = (Get-UiText 'Файлы, кэш ODIS/UPI2, ветки реестра, записи установщика' 'Files, ODIS/UPI2 cache, registry keys, installer entries') },
-            [pscustomobject]@{ Key = '2'; Title = (Get-UiText 'Обновить Autodesk Licensing Service' 'Update Autodesk Licensing Service'); Desc = (Get-UiText 'Требуется AdskLicensing-installer *.exe рядом со скриптом' 'Requires AdskLicensing-installer *.exe next to the script') }
+            [pscustomobject]@{ Key = '2'; Title = (Get-UiText 'Обновить Autodesk Licensing Service' 'Update Autodesk Licensing Service'); Desc = (Get-UiText 'Скачать официальный установщик или выбрать локальный EXE' 'Download the official installer or select a local EXE') }
         )
 
         $choice = Show-Menu -Items $items -Title (Get-UiText 'очистка Revit' 'Revit cleanup') -BackText (Get-UiText 'Назад' 'Back')
@@ -2875,6 +2818,249 @@ function Invoke-ModuleRsn {
     }
 }
 
+function Get-LicenseLocalhostCleanup {
+    param([string]$Value)
+    $parts = @($Value -split '[;,]' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $keep = @($parts | Where-Object { $_ -notmatch '^(?:\d*@)?(?:localhost|127\.0\.0\.1|\[?::1\]?)$' })
+    $changed = $keep.Count -ne $parts.Count
+    $updated = if ($changed) { $keep -join ';' } else { $Value }
+    [pscustomobject]@{ Changed=$changed; Value=$updated }
+}
+
+function Get-LicenseRepairRoot {
+    return Join-Path $env:ProgramData 'RevitToolkit\LicenseRepair'
+}
+
+function New-LicenseRepairBackup {
+    $root = Get-LicenseRepairRoot
+    $backup = Join-Path $root ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $backup -Force -ErrorAction Stop | Out-Null
+    $values = @()
+    foreach ($target in @('User', 'Machine', 'Process')) {
+        foreach ($name in @('ADSKFLEX_LICENSE_FILE', 'LM_LICENSE_FILE')) {
+            $values += [pscustomobject]@{ Name=$name; Target=$target; Value=[Environment]::GetEnvironmentVariable($name, $target) }
+        }
+    }
+    $values | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $backup 'LicenseEnvironment.json') -Encoding UTF8
+    foreach ($key in @('SOFTWARE\FLEXlm License Manager\AdskNLM', 'SOFTWARE\WOW6432Node\FLEXlm License Manager\AdskNLM', 'SYSTEM\CurrentControlSet\Services\AdskNLM')) {
+        if (-not (Test-Path -LiteralPath "HKLM:\$key")) { continue }
+        $name = $key.Replace('\', '_') + '.reg'
+        & reg.exe export "HKLM\$key" (Join-Path $backup $name) /y | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw (Get-UiText 'Не удалось сохранить реестр. Очистка остановлена.' 'Registry backup failed. Cleanup stopped.') }
+    }
+    Write-Ok (Get-UiText "Резервная копия: $backup" "Backup: $backup")
+    return $backup
+}
+
+function Show-LicenseDiagnostics {
+    Write-Kv 'AdskLicensing' (Get-AdskLicensingVersionText)
+    foreach ($name in @('AdskLicensingService', 'AdskNLM')) {
+        $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+        $status = if ($service) { [string]$service.Status } else { Get-UiText 'не найдено' 'not found' }
+        Write-Kv $name $status
+    }
+    foreach ($target in @('User', 'Machine', 'Process')) {
+        foreach ($name in @('ADSKFLEX_LICENSE_FILE', 'LM_LICENSE_FILE')) {
+            $value = [Environment]::GetEnvironmentVariable($name, $target)
+            Write-Kv "$name / $target" $value
+        }
+    }
+    foreach ($folder in @(
+        "$env:ProgramFiles\Autodesk Network License Manager",
+        "${env:ProgramFiles(x86)}\Autodesk Network License Manager",
+        "$env:ProgramFiles\Autodesk\Network License Manager",
+        "${env:ProgramFiles(x86)}\Common Files\Autodesk Shared\Network License Manager"
+    )) {
+        if (Test-Path -LiteralPath $folder -PathType Container) { Write-Kv 'Network License Manager' $folder }
+    }
+    $root = Join-Path ${env:CommonProgramFiles(x86)} 'Autodesk Shared\AdskLicensing'
+    if (Test-Path -LiteralPath $root) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $root -Filter 'version.dll' -File -Recurse -ErrorAction Stop)) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            Write-Info "$($file.FullName) / $($signature.Status)"
+            Write-Info ((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash)
+        }
+    }
+    Write-Info (Get-UiText 'Отчёт по DLL диагностический: файлы автоматически не удаляются.' 'DLL report is diagnostic: files are not removed automatically.')
+}
+
+function Invoke-LicenseLocalCleanup {
+    Write-Warn (Get-UiText 'Будут удалены служба AdskNLM и её ключи, локальные адреса localhost в FLEX-переменных. Легитимный локальный сервер лицензий может перестать работать.' 'This removes the AdskNLM service and its keys, and localhost entries in FLEX variables. A legitimate local license server may stop working.')
+    if (Test-DryRun (Get-UiText 'резервная копия, очистка AdskNLM/localhost и карантин временных папок AdskNLM' 'backup, AdskNLM/localhost cleanup and quarantine of AdskNLM temporary folders')) { return }
+    if (-not (Assert-Admin)) { return }
+    if (-not (Confirm-Action -Question (Get-UiText 'Очистить локальную конфигурацию AdskNLM/localhost?' 'Clean up the local AdskNLM/localhost configuration?') -Danger)) { return }
+    $backup = New-LicenseRepairBackup
+    $service = Get-Service -Name 'AdskNLM' -ErrorAction SilentlyContinue
+    if ($service) {
+        if ($service.Status -ne 'Stopped') { Stop-Service -Name 'AdskNLM' -Force -ErrorAction Stop }
+        & sc.exe delete AdskNLM | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'sc.exe delete AdskNLM failed' }
+    }
+    foreach ($target in @('User', 'Machine', 'Process')) {
+        foreach ($name in @('ADSKFLEX_LICENSE_FILE', 'LM_LICENSE_FILE')) {
+            $value = [Environment]::GetEnvironmentVariable($name, $target)
+            $result = Get-LicenseLocalhostCleanup $value
+            if ($result.Changed) {
+                $newValue = if ($result.Value) { $result.Value } else { $null }
+                [Environment]::SetEnvironmentVariable($name, $newValue, $target)
+                Write-Ok "$name / $target"
+            }
+        }
+    }
+    foreach ($key in @('HKLM:\SOFTWARE\FLEXlm License Manager\AdskNLM', 'HKLM:\SOFTWARE\WOW6432Node\FLEXlm License Manager\AdskNLM')) {
+        if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction Stop }
+    }
+    $tempRoot = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
+    foreach ($name in @('Adsk-NLM', 'AdskNLM')) {
+        $source = [IO.Path]::GetFullPath((Join-Path $tempRoot $name))
+        $destination = [IO.Path]::GetFullPath((Join-Path $backup $name))
+        if (-not $source.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or -not $destination.StartsWith($backup.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe quarantine path' }
+        if (Test-Path -LiteralPath $source) { Move-Item -LiteralPath $source -Destination $destination -ErrorAction Stop }
+    }
+    Update-EnvironmentBroadcast | Out-Null
+    Write-Ok (Get-UiText 'Очистка выполнена. Резервная копия сохранена; перезапустите Autodesk-приложения.' 'Cleanup completed. Backup saved; restart Autodesk applications.')
+}
+
+function Invoke-LicenseLoginReset {
+    if (Test-DryRun (Get-UiText 'резервная копия и сброс кэша входа текущего пользователя' 'backup and reset the current user sign-in cache')) { return }
+    if (-not (Assert-Admin)) { return }
+    if (-not (Confirm-Action -Question (Get-UiText 'Сбросить вход Autodesk? Закройте приложения. Потребуется войти заново.' 'Reset Autodesk sign-in? Close applications. You will need to sign in again.') -Danger)) { return }
+    $backup = New-LicenseRepairBackup
+    foreach ($name in @('AdskIdentityManager', 'AdskLicensingAgent', 'AdSSO')) {
+        Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Stop
+    }
+    foreach ($relative in @('Autodesk\Web Services\LoginState.xml', 'Autodesk\Identity Services\idservices.db', 'Autodesk\Identity Services\idservices.db-wal', 'Autodesk\Identity Services\idservices.db-shm')) {
+        $file = Join-Path $env:LOCALAPPDATA $relative
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { continue }
+        $destination = Join-Path $backup ([IO.Path]::GetFileName($file))
+        Copy-Item -LiteralPath $file -Destination $destination -ErrorAction Stop
+        Remove-Item -LiteralPath $file -Force -ErrorAction Stop
+        Write-Ok $file
+    }
+}
+
+function Test-AutodeskDownloadUri {
+    param([string]$Url)
+    $uri = $null
+    return ([Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$uri) -and $uri.Scheme -eq 'https' -and
+        ($uri.Host -eq 'autodesk.com' -or $uri.Host.EndsWith('.autodesk.com', [StringComparison]::OrdinalIgnoreCase)) -and -not $uri.UserInfo)
+}
+
+function Get-AutodeskComponentPage {
+    param([ValidateSet('Licensing', 'Identity')][string]$Component)
+    if ($Component -eq 'Licensing') { return 'https://www.autodesk.com/support/technical/article/caas/tsarticles/ts/f5IhBc15i0kOwzBb8lcEN.html' }
+    return 'https://www.autodesk.com/support/technical/article/caas/tsarticles/ts/7zbgTemIhA3ltRs4eACL0g.html'
+}
+
+function Get-AutodeskComponentLinks {
+    param([string]$Html, [ValidateSet('Licensing', 'Identity')][string]$Component)
+    $decoded = [Net.WebUtility]::HtmlDecode($Html.Replace('\/', '/').Replace('\u002F', '/'))
+    $pattern = if ($Component -eq 'Licensing') { '(?i)AdskLicensing[^/]*?(?:win|installer)[^/]*\.(?:zip|exe)$' } else { '(?i)(?:AdskIdentity|IdentityManager)[^/]*\.(?:zip|exe)$' }
+    return @([regex]::Matches($decoded, 'https://[^\s"<>\\]+') | ForEach-Object { $_.Value.TrimEnd("'", ')', ',') } |
+        Where-Object { (Test-AutodeskDownloadUri $_) -and ([Uri]$_).AbsolutePath -match $pattern } | Sort-Object -Unique)
+}
+
+function Assert-AutodeskInstaller {
+    param([string]$Path)
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop
+    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(?i)(?:^|,\s*)O="?Autodesk(?:,?\s+Inc\.?)?"?(?:,|$)') {
+        throw (Get-UiText 'Установщик не имеет действительной подписи Autodesk. Запуск остановлен.' 'Installer has no valid Autodesk signature. Execution stopped.')
+    }
+}
+
+function Get-AutodeskComponentInstaller {
+    param([ValidateSet('Licensing', 'Identity')][string]$Component)
+    $page = Get-AutodeskComponentPage $Component
+    Write-Info $page
+    $choice = Read-Text -Label (Get-UiText 'Источник: 1 — скачать с Autodesk, 2 — локальный EXE, Enter — отмена' 'Source: 1 — download from Autodesk, 2 — local EXE, Enter to cancel')
+    if ($choice -eq '2') {
+        $path = (Read-Text -Label (Get-UiText 'Путь к официальному установщику EXE' 'Path to the official EXE installer')).Trim('"')
+        if (-not $path) { return $null }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or [IO.Path]::GetExtension($path) -ine '.exe') { throw 'Installer EXE not found' }
+        Assert-AutodeskInstaller $path
+        return (Get-Item -LiteralPath $path).FullName
+    }
+    if ($choice -ne '1') { return $null }
+    if (Test-DryRun (Get-UiText "скачивание $Component с Autodesk, распаковка и проверка подписи" "download $Component from Autodesk, extract and verify signature")) { return $null }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $links = @()
+    try { $html = (Invoke-WebRequest -Uri $page -UseBasicParsing -ErrorAction Stop).Content; $links = @(Get-AutodeskComponentLinks $html $Component) }
+    catch { Write-Warn (Get-UiText 'Страница Autodesk недоступна. Можно указать прямую официальную ссылку.' 'Autodesk page is unavailable. You can provide an official direct link.') }
+    if ($links.Count -eq 1) { $url = $links[0] }
+    else {
+        foreach ($link in $links) { Write-Info $link }
+        $url = Read-Text -Label (Get-UiText 'Прямая HTTPS-ссылка Autodesk на Windows EXE/ZIP (Enter — отмена)' 'Direct Autodesk HTTPS link to Windows EXE/ZIP (Enter to cancel)')
+        if (-not $url) { return $null }
+    }
+    if (-not (Test-AutodeskDownloadUri $url) -or ([Uri]$url).AbsolutePath -notmatch '(?i)\.(exe|zip)$') { throw 'Expected official Autodesk HTTPS EXE/ZIP link' }
+    $folder = Join-Path $Script:Root ('components\' + $Component + '\' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop | Out-Null
+    $package = Join-Path $folder ([IO.Path]::GetFileName(([Uri]$url).AbsolutePath))
+    $response = Invoke-WebRequest -Uri $url -UseBasicParsing -OutFile $package -PassThru -ErrorAction Stop
+    $finalUri = if ($response.BaseResponse.ResponseUri) { $response.BaseResponse.ResponseUri.AbsoluteUri } elseif ($response.BaseResponse.RequestMessage.RequestUri) { $response.BaseResponse.RequestMessage.RequestUri.AbsoluteUri } else { $url }
+    if (-not (Test-AutodeskDownloadUri $finalUri)) { throw 'Download redirected outside Autodesk' }
+    if ([IO.Path]::GetExtension($package) -ieq '.zip') {
+        Expand-Archive -LiteralPath $package -DestinationPath (Join-Path $folder 'extracted') -ErrorAction Stop
+        $name = if ($Component -eq 'Licensing') { 'AdskLicensing*installer*.exe' } else { '*Identity*Manager*.exe' }
+        $executables = @(Get-ChildItem -LiteralPath (Join-Path $folder 'extracted') -Filter $name -File -Recurse -ErrorAction Stop)
+        if ($executables.Count -ne 1) { throw 'Could not identify a unique component installer in the archive; use local EXE mode' }
+        $package = $executables[0].FullName
+    }
+    Assert-AutodeskInstaller $package
+    Write-Ok $package
+    return $package
+}
+
+function Invoke-AutodeskComponentInstall {
+    param([ValidateSet('Licensing', 'Identity')][string]$Component, [switch]$Reinstall)
+    if (Test-DryRun (Get-UiText "скачивание/выбор, проверка подписи и установка $Component; переустановка = $Reinstall" "download/select, verify signature and install $Component; reinstall = $Reinstall")) { return }
+    if (-not (Assert-Admin)) { return }
+    $installer = Get-AutodeskComponentInstaller $Component
+    if (-not $installer) { return }
+    if (-not (Confirm-Action -Question (Get-UiText "Установить $Component? Закройте Autodesk-приложения; будет открыт официальный установщик." "Install $Component? Close Autodesk applications; the official installer will open."))) { return }
+    Assert-AutodeskInstaller $installer
+    if ($Reinstall -and $Component -eq 'Licensing') {
+        $uninstaller = Join-Path ${env:CommonProgramFiles(x86)} 'Autodesk Shared\AdskLicensing\uninstall.exe'
+        if (Test-Path -LiteralPath $uninstaller) {
+            Assert-AutodeskInstaller $uninstaller
+            $process = Start-Process -FilePath $uninstaller -ArgumentList '--mode unattended' -Wait -PassThru -ErrorAction Stop
+            if ($process.ExitCode -notin @(0, 3010)) { throw "Licensing uninstall failed: $($process.ExitCode)" }
+        }
+    }
+    $process = Start-Process -FilePath $installer -Wait -PassThru -ErrorAction Stop
+    if ($process.ExitCode -notin @(0, 3010, 1641)) { throw "Installer failed: $($process.ExitCode)" }
+    Write-Ok (Get-UiText "Установщик завершён: $($process.ExitCode). Проверьте диагностику." "Installer completed: $($process.ExitCode). Check diagnostics.")
+    if ($process.ExitCode -in @(3010, 1641)) { Write-Warn (Get-UiText 'Установщик сообщил о необходимости перезагрузки.' 'The installer reported a restart requirement.') }
+}
+
+function Invoke-ModuleLicense {
+    while ($true) {
+        $items = @(
+            [pscustomobject]@{ Key='1'; Title=(Get-UiText 'Диагностика лицензирования' 'Licensing diagnostics'); Desc=(Get-UiText 'Службы, FLEX-переменные, подписи и хэши version.dll' 'Services, FLEX variables, version.dll signatures and hashes') },
+            [pscustomobject]@{ Key='2'; Title=(Get-UiText 'Очистить AdskNLM / localhost' 'Clean up AdskNLM / localhost'); Desc=(Get-UiText 'С резервной копией; другие адреса лицензий сохраняются' 'With backup; other license addresses are preserved') },
+            [pscustomobject]@{ Key='3'; Title=(Get-UiText 'Сбросить вход Autodesk' 'Reset Autodesk sign-in'); Desc=(Get-UiText 'Кэш текущего пользователя с резервной копией' 'Current user cache with backup') },
+            [pscustomobject]@{ Key='4'; Title=(Get-UiText 'Скачать / установить Licensing Service' 'Download / install Licensing Service'); Desc=(Get-UiText 'Официальный установщик Autodesk или локальный EXE' 'Official Autodesk installer or local EXE') },
+            [pscustomobject]@{ Key='5'; Title=(Get-UiText 'Скачать / установить Identity Manager' 'Download / install Identity Manager'); Desc=(Get-UiText 'Компонент входа для продуктов 2024 и новее' 'Sign-in component for products 2024 and newer') },
+            [pscustomobject]@{ Key='6'; Title=(Get-UiText 'Переустановить Licensing Service' 'Reinstall Licensing Service'); Desc=(Get-UiText 'Сначала получить и проверить установщик, затем удалить старую службу' 'Obtain and verify the installer before removing the old service') },
+            [pscustomobject]@{ Key='7'; Title=(Get-UiText 'Открыть резервные копии' 'Open backups'); Desc=(Get-LicenseRepairRoot) }
+        )
+        $choice = Show-Menu $items -Title (Get-UiText 'Восстановление лицензирования Autodesk' 'Autodesk licensing repair') -BackText (Get-UiText 'Назад' 'Back')
+        if ($choice -eq '0') { return }
+        try {
+            switch ($choice) {
+                '1' { Show-LicenseDiagnostics }
+                '2' { Invoke-LicenseLocalCleanup }
+                '3' { Invoke-LicenseLoginReset }
+                '4' { Invoke-AutodeskComponentInstall Licensing }
+                '5' { Invoke-AutodeskComponentInstall Identity }
+                '6' { Invoke-AutodeskComponentInstall Licensing -Reinstall }
+                '7' { $root = Get-LicenseRepairRoot; if (Test-Path -LiteralPath $root) { Start-Process explorer.exe -ArgumentList ('"' + $root + '"') } }
+            }
+        } catch { Write-Fail $_.Exception.Message }
+        Wait-Menu
+    }
+}
+
 function Invoke-SettingsMenu {
     while ($true) {
         $dryText = if ($Script:Ctx.DryRun) { (Get-UiText 'включён' 'enabled') } else { (Get-UiText 'выключен' 'disabled') }
@@ -2922,6 +3108,7 @@ function Invoke-ModuleByKey {
         'backups'  { Invoke-ModuleBackups }
         'autodesk' { Invoke-ModuleAutodesk }
         'rsn'      { Invoke-ModuleRsn }
+        'license'  { Invoke-ModuleLicense }
     }
 }
 
@@ -2936,11 +3123,12 @@ function Invoke-MainMenu {
         [pscustomobject]@{ Key = '6'; Title = (Get-UiText 'Backup-папки и журналы' 'Backup folders and journals'); Desc = (Get-UiText 'Поиск *_backup с парным .rvt, старые журналы, CSV-отчёт' 'Find *_backup with a matching .rvt, old journals, CSV report') },
         [pscustomobject]@{ Key = '7'; Title = (Get-UiText 'Autodesk: Defender и сеть' 'Autodesk: Defender and network'); Desc = (Get-UiText 'Исключения, откат, сетевые блокировки, FAB' 'Exclusions, rollback, network blocks, FAB') },
         [pscustomobject]@{ Key = '8'; Title = (Get-UiText 'Серверы Revit / RSN.ini' 'Revit servers / RSN.ini'); Desc = (Get-UiText 'Создание, добавление, редактирование и удаление адресов' 'Create, add, edit and remove server addresses') },
+        [pscustomobject]@{ Key = 'l'; Title = (Get-UiText 'Восстановление лицензирования' 'Licensing repair'); Desc = (Get-UiText 'Диагностика, резервные копии, скачивание и установка компонентов' 'Diagnostics, backups, component downloads and installation') },
         [pscustomobject]@{ Key = '9'; Title = (Get-UiText 'Настройки сессии' 'session settings'); Desc = (Get-UiText 'Сухой прогон, подтверждения, логи' 'Dry run, confirmations, logs') }
     )
 
     $map = @{
-        '1' = 'status'; '2' = 'iis'; '3' = 'maxbytes'; '4' = 'accel'; '5' = 'clean'; '6' = 'backups'; '7' = 'autodesk'; '8' = 'rsn'
+        '1' = 'status'; '2' = 'iis'; '3' = 'maxbytes'; '4' = 'accel'; '5' = 'clean'; '6' = 'backups'; '7' = 'autodesk'; '8' = 'rsn'; 'l' = 'license'
     }
 
         $choice = Show-Menu -Items $items -Title (Get-UiText 'что делаем' 'choose an action') -BackText (Get-UiText 'Выход' 'Exit')
