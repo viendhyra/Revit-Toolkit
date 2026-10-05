@@ -332,16 +332,41 @@ function Format-UiText {
 
 function Show-StartupAnimation {
     if (-not (Test-AnimatedUi)) { return }
-    Write-Banner
-    $frames = @('[     ]', '[=    ]', '[==   ]', '[===  ]', '[==== ]', '[=====]')
-    foreach ($frame in $frames) {
-        Write-Host ("`r  " + $Script:C.Cyan + $frame + '  REVIT TOOLKIT / READY' + $Script:C.Reset) -NoNewline
-        Start-Sleep -Milliseconds 45
+    $visible = [Console]::CursorVisible
+    try {
+        [Console]::CursorVisible = $false
+        for ($phase = 0; $phase -lt 12; $phase++) {
+            Write-Banner -LogoPhase $phase
+            if ([Console]::KeyAvailable) { break }
+            Start-Sleep -Milliseconds 30
+        }
+    } finally {
+        [Console]::CursorVisible = $visible
     }
-    Write-Host ''
+}
+
+function Get-ToolkitLogo {
+    if ($Ascii) {
+        return @(' ____       ______ ', '|  _ \     |__  __|', '| |_) |  /    | |  ', '|  _ <  /     | |  ', '|_| \_\       |_|  ', '                   ')
+    }
+    return @('██████╗   ╱ ████████╗', '██╔══██╗ ╱  ╚══██╔══╝', '██████╔╝╱      ██║   ', '██╔══██╗       ██║   ', '██║  ██║       ██║   ', '╚═╝  ╚═╝       ╚═╝   ')
+}
+
+function Format-LogoRow {
+    param([string]$Row, [int]$Phase = -1)
+    if ($Phase -lt 0 -or -not $Script:Ctx.Vt) { return $Script:C.Cyan + $Row + $Script:C.Reset }
+    $builder = New-Object Text.StringBuilder
+    for ($i = 0; $i -lt $Row.Length; $i++) {
+        $distance = [Math]::Abs($i - ($Phase * 2))
+        $color = if ($distance -le 1) { $Script:C.Text } elseif ($distance -le 4) { $Script:C.Cyan } else { $Script:C.Blue }
+        [void]$builder.Append($color).Append($Row[$i])
+    }
+    [void]$builder.Append($Script:C.Reset)
+    return $builder.ToString()
 }
 
 function Write-Banner {
+    param([int]$LogoPhase = -1)
     if ($Script:Ctx.Vt -and (Test-InteractiveKeys)) {
         Write-Host ("$($Script:ESC)[H$($Script:ESC)[J") -NoNewline
     } else { Clear-Host }
@@ -351,11 +376,37 @@ function Write-Banner {
     $width = $Script:Ctx.Width - 4
     $mode = if ($Script:Ctx.DryRun) { 'DRY RUN' } else { 'LIVE' }
     $rights = if ($Script:Ctx.IsAdmin) { 'ADMIN' } else { 'USER' }
+    $height = 0
+    try { $height = [Console]::WindowHeight } catch { }
+    $large = $Script:Ctx.Width -ge 68 -and $height -ge 30
+    $inside = $Script:Ctx.Width - 6
+    $rail = if ($Ascii) { '-' } else { [string][char]0x2500 }
+    $edge = if ($Ascii) { '|' } else { [string][char]0x2502 }
+    $tl = if ($Ascii) { '+' } else { [string][char]0x256D }
+    $tr = if ($Ascii) { '+' } else { [string][char]0x256E }
+    $bl = if ($Ascii) { '+' } else { [string][char]0x2570 }
+    $br = if ($Ascii) { '+' } else { [string][char]0x256F }
     Write-Blank
-    Write-Host ('  ' + $Script:C.Bold + $Script:C.Cyan + (Format-UiText "R / T   REVIT TOOLKIT   v$Script:AppVersion" $width) + $Script:C.Reset)
-    Write-Host ('  ' + $Script:C.Muted + (Format-UiText "AUTODESK SYSTEM CONSOLE   /   $env:COMPUTERNAME" $width) + $Script:C.Reset)
+    Write-Host ('  ' + $Script:C.Blue + $tl + ($rail * $inside) + $tr + $Script:C.Reset)
+    if ($large) {
+        $logo = @(Get-ToolkitLogo)
+        $labels = @('REVIT / TOOLKIT', 'BIM OPERATIONS CONSOLE', '', (Get-UiText 'МОДЕЛИ / СЕРВЕРЫ / СИСТЕМА' 'MODELS / SERVERS / SYSTEM'), "VERSION $Script:AppVersion", 'R / T  ::  AUTODESK WORKSPACE')
+        for ($i = 0; $i -lt $logo.Count; $i++) {
+            $row = ' ' + $logo[$i].PadRight(26)
+            $label = (Format-UiText $labels[$i] ($inside - 28)).PadRight($inside - 28) + ' '
+            Write-Host ('  ' + $Script:C.Blue + $edge + (Format-LogoRow $row -Phase $LogoPhase) + $Script:C.Bold + $Script:C.Text + $label + $Script:C.Reset + $Script:C.Blue + $edge + $Script:C.Reset)
+        }
+        $Script:BannerRows = 12
+    } else {
+        $label = (Format-UiText "R / T   REVIT TOOLKIT   v$Script:AppVersion" ($inside - 2)).PadRight($inside - 2)
+        Write-Host ('  ' + $Script:C.Blue + $edge + ' ' + $Script:C.Cyan + $Script:C.Bold + $label + $Script:C.Reset + ' ' + $Script:C.Blue + $edge + $Script:C.Reset)
+        $Script:BannerRows = 7
+    }
+    Write-Host ('  ' + $Script:C.Blue + $bl + ($rail * $inside) + $br + $Script:C.Reset)
     $color = if ($Script:Ctx.DryRun) { $Script:C.Violet } else { $Script:C.Yellow }
-    Write-Host ('  ' + $color + "[$mode]" + $Script:C.Reset + $Script:C.Muted + "  [$rights]  PS $($PSVersionTable.PSVersion)" + $Script:C.Reset)
+    $languageLabel = if ($Script:UiLanguage -eq 'en') { 'EN' } else { 'RU' }
+    Write-Host ('  ' + $color + "[$mode]" + $Script:C.Reset + $Script:C.Muted + "  [$rights]  [$languageLabel]  PS $($PSVersionTable.PSVersion)" + $Script:C.Reset)
+    Write-Meta (Format-UiText "WORKSTATION / $env:COMPUTERNAME" $width)
     Write-Rule
 }
 
@@ -433,7 +484,7 @@ function Show-Menu {
             # Scroll a compact viewport so large submenus also fit small terminals.
             $rows = $Items.Count
             if ($useKeys) {
-                try { $rows = [Math]::Max(1, [Math]::Min($Items.Count, [Console]::WindowHeight - 16)) } catch { }
+                try { $rows = [Math]::Max(1, [Math]::Min($Items.Count, [Console]::WindowHeight - $Script:BannerRows - 10)) } catch { }
             }
             $start = [Math]::Max(0, [Math]::Min($index - [int]($rows / 2), $Items.Count - $rows))
             for ($i = $start; $i -lt $start + $rows; $i++) {
