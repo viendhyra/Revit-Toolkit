@@ -101,7 +101,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\RevitToolkit.ps1 -Modu
 
 Пункт 7 главного меню или `-Module autodesk` открывает модуль из Autodesk Control Center:
 
-- Поиск каталогов Autodesk/Revit/pyRevit, мест установки из реестра и всех пользовательских профилей; добавление и проверка исключений каталогов и процессов.
+- **1 — Все Autodesk/Revit: добавить исключения**: стандартные каталоги, установки из реестра и данные всех пользователей. Включены `Autodesk Shared` с `Network License Manager`, `Common Files\Autodesk`, FLEXnet, папка распакованных установщиков `%SystemDrive%\Autodesk`, кэши `RVT 20xx`, pyRevit и Desktop Connector. Дополнительно распознаются каталоги AutoCAD, Civil 3D, 3ds Max, Inventor, Maya, Navisworks и Adsk в Program Files, ProgramData и AppData (Roaming/Local/LocalLow). Исключение папки распространяется на все вложенные файлы и подпапки: отдельные исключения каждого файла не создаются. Сетевые правила при добавлении исключений не меняются.
 - `ExtraPaths.txt` рядом со скриптом: дополнительные абсолютные пути, по одному на строку; строки с `#` пропускаются. Корни дисков и широкие системные каталоги отклоняются.
 - Удаление только учтённых исключений. Учёт совместим с исходной утилитой: `%ProgramData%\AutodeskDefenderExclusions\managed.json`.
 - Блокировка исходящего трафика AutoCAD/Revit в профиле Public; блокировка всех найденных Autodesk EXE в обоих направлениях во всех сетевых профилях; удаление правил утилиты.

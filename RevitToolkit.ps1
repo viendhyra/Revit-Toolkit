@@ -2029,7 +2029,8 @@ try {
     if ($profilesDirectory) { $UsersRoot = [Environment]::ExpandEnvironmentVariables($profilesDirectory) }
 } catch {}
 
-$NamePattern = 'Autodesk|Revit|pyRevit'
+# Product folders can omit "Autodesk" in their name (including RVT caches).
+$NamePattern = 'Autodesk|Revit|pyRevit|^AutoCAD|^Civil 3D|^3ds Max|^Inventor|^Maya|^Navisworks|^Adsk|^RVT\s*20\d{2}'
 
 # ------------------------------------------------------------------
 # Процессы Autodesk (исключение по имени действует для любого пути)
@@ -2120,6 +2121,8 @@ function Get-ExclusionTargets {
     # 1. Стандартные каталоги
     @(
         "$PF\Autodesk", "$PF86\Autodesk",
+        "$env:SystemDrive\Autodesk",
+        "$PF\Common Files\Autodesk", "$PF86\Common Files\Autodesk",
         "$PF\Common Files\Autodesk Shared", "$PF86\Common Files\Autodesk Shared",
         "$PF\Common Files\Macrovision Shared\FLEXnet Publisher",
         "$PF86\Common Files\Macrovision Shared\FLEXnet Publisher",
@@ -2164,7 +2167,7 @@ function Get-ExclusionTargets {
             'DC'   # Autodesk Desktop Connector
         ) | ForEach-Object { & $add (Join-Path $prof $_) $who $false }
 
-        foreach ($sub in @('AppData\Roaming', 'AppData\Local')) {
+        foreach ($sub in @('AppData\Roaming', 'AppData\Local', 'AppData\LocalLow')) {
             $r = Join-Path $prof $sub
             if (-not (Test-Path -LiteralPath $r)) { continue }
             Get-ChildItem -LiteralPath $r -Directory -Force -ErrorAction SilentlyContinue |
@@ -2510,6 +2513,7 @@ function Invoke-Install {
 
     Write-Host (Get-UiText "`nПоиск каталогов Autodesk..." "`nSearching for Autodesk folders...") -ForegroundColor Cyan
     $targets = Get-ExclusionTargets
+    Write-Info (Get-UiText 'Исключение папки охватывает все её файлы и подпапки. Network License Manager входит в Autodesk Shared. Сетевые правила не меняются.' 'Folder exclusions cover all files and subfolders. Network License Manager is included in Autodesk Shared. Network rules are unchanged.')
     foreach ($p in ($targets.Keys | Sort-Object)) { Write-Info (Get-UiText "Каталог: $p" "Folder: $p") }
     foreach ($p in $ProcessList) { Write-Info (Get-UiText "Процесс: $p" "Process: $p") }
     if (Test-DryRun (Get-UiText 'добавление недостающих исключений Autodesk' 'adding missing Autodesk exclusions')) { return }
@@ -2656,7 +2660,7 @@ function Invoke-Remove {
 
 
     $items = @(
-        [pscustomobject]@{ Key='1'; Title=(Get-UiText 'Добавить исключения Defender' 'Add Defender exclusions'); Desc=(Get-UiText 'Каталоги, профили пользователей, процессы Autodesk' 'Folders, user profiles, Autodesk processes') },
+        [pscustomobject]@{ Key='1'; Title=(Get-UiText 'Все Autodesk/Revit: добавить исключения' 'All Autodesk/Revit: add exclusions'); Desc=(Get-UiText 'Все файлы и подпапки найденных каталогов, включая Network License Manager' 'All files and subfolders of discovered folders, including Network License Manager') },
         [pscustomobject]@{ Key='2'; Title=(Get-UiText 'Проверить исключения' 'Check exclusions'); Desc=(Get-UiText 'Найденные, отсутствующие и сторонние исключения' 'Present, missing and other exclusions') },
         [pscustomobject]@{ Key='3'; Title=(Get-UiText 'Удалить учтённые исключения' 'Remove owned exclusions'); Desc=(Get-UiText 'Только добавленные этим скриптом или исходной утилитой' 'Only entries added by this script or the original utility') },
         [pscustomobject]@{ Key='4'; Title=(Get-UiText 'Состояние сети' 'Network status'); Desc=(Get-UiText 'Правила Autodesk в Windows Firewall' 'Autodesk rules in Windows Firewall') },
