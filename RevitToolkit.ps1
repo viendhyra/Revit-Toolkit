@@ -14,7 +14,7 @@
       6. Сводка окружения (что установлено, что настроено)
 
 .PARAMETER Module
-    Запуск конкретного модуля без меню: status | iis | maxbytes | accel | clean | backups
+    Запуск конкретного модуля без меню: status | iis | maxbytes | accel | clean | backups | autodesk
 
 .PARAMETER DryRun
     Сухой прогон: всё ищется и показывается, но ничего не удаляется и не меняется.
@@ -40,7 +40,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('', 'status', 'iis', 'maxbytes', 'accel', 'clean', 'backups')]
+    [ValidateSet('', 'status', 'iis', 'maxbytes', 'accel', 'clean', 'backups', 'autodesk')]
     [string]$Module = '',
 
     [switch]$DryRun,
@@ -1854,6 +1854,654 @@ function Invoke-ModuleBackups {
 #  БЛОК 5. Настройки сессии и главное меню
 # ============================================================================
 
+function Invoke-ModuleAutodesk {
+    # Local scope keeps imported helper names out of the toolkit's shared UI.
+    $ScriptRoot = $Script:Root
+    $StateDir = Join-Path $env:ProgramData 'AutodeskDefenderExclusions'
+    $StateFile = Join-Path $StateDir 'managed.json'
+    $LegacyMarker = Join-Path $ScriptRoot 'Autodesk_Defender_Exclusions.managed.json'
+    $ExtraFile = Join-Path $ScriptRoot 'ExtraPaths.txt'
+
+    function Write-AutodeskLog {
+        param([string]$Message, [string]$Level = 'INFO')
+        Write-Log "[Autodesk][$Level] $Message"
+        switch ($Level) {
+            'OK' { Write-Ok $Message }
+            'WARN' { Write-Warn $Message }
+            'ERROR' { Write-Fail $Message }
+            default { Write-Info $Message }
+        }
+    }
+
+$PF   = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
+$PF86 = ${env:ProgramFiles(x86)}
+$PD   = $env:ProgramData
+
+$UsersRoot = "$env:SystemDrive\Users"
+try {
+    $profilesDirectory = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -Name ProfilesDirectory -ErrorAction Stop).ProfilesDirectory
+    if ($profilesDirectory) { $UsersRoot = [Environment]::ExpandEnvironmentVariables($profilesDirectory) }
+} catch {}
+
+$NamePattern = 'Autodesk|Revit|pyRevit'
+
+# ------------------------------------------------------------------
+# Процессы Autodesk (исключение по имени действует для любого пути)
+# ------------------------------------------------------------------
+$ProcessList = @(
+    # Revit
+    'Revit.exe', 'RevitWorker.exe', 'RevitAccelerator.exe',
+    # AutoCAD и вертикали (Civil 3D, Architecture и др. работают через acad.exe)
+    'acad.exe', 'accoreconsole.exe', 'AcWebBrowser.exe', 'AdAppMgrSvc.exe',
+    # 3ds Max
+    '3dsmax.exe', '3dsmaxbatch.exe', '3dsmaxcmd.exe',
+    # Navisworks
+    'Roamer.exe', 'FiletoolsTaskRunner.exe',
+    # Inventor, Maya
+    'Inventor.exe', 'maya.exe',
+    # Лицензирование, вход, обновления
+    'AdskLicensingService.exe', 'AdskLicensingAgent.exe',
+    'AdskAccessCore.exe', 'AdskAccessService.exe', 'AdskAccessServiceHost.exe', 'AdskAccessUIHost.exe',
+    'AdskIdentityManager.exe', 'AdskIdentityManagerUI.exe', 'AdSSO.exe',
+    'AdskUpdateCheck.exe', 'AdskInstaller.exe', 'AdskNetworkService.exe',
+    'AutodeskAccess.exe', 'AutodeskDesktopApp.exe',
+    'GenuineService.exe', 'ADPClientService.exe',
+    # Desktop Connector
+    'DesktopConnector.Applications.Tray.exe',
+    # Сетевой сервер лицензий (FlexNet)
+    'adskflex.exe', 'lmgrd.exe', 'FNPLicensingService.exe'
+)
+
+# ------------------------------------------------------------------
+# Пути
+# ------------------------------------------------------------------
+function Get-NormalizedPath {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    $p = [Environment]::ExpandEnvironmentVariables($Path.Trim().Trim('"'))
+    # Только абсолютные локальные пути или UNC
+    if ($p -notmatch '^([A-Za-z]:\\|\\\\[^\\]+\\)') { return $null }
+    try { $p = [System.IO.Path]::GetFullPath($p) } catch { return $null }
+    return $p.TrimEnd('\')
+}
+
+# Каталоги, которые нельзя исключать целиком (защита от кривых записей в реестре)
+$Forbidden = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+@($PF, $PF86, $PD, $env:SystemRoot, $UsersRoot,
+  "$PF\Common Files", "$PF86\Common Files",
+  "$env:SystemDrive\", "$UsersRoot\Public") |
+    ForEach-Object { $n = Get-NormalizedPath $_; if ($n) { [void]$Forbidden.Add($n) } }
+
+function Test-SafeExclusionPath {
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    if ($Path -match '^[A-Za-z]:$') { return $false }            # корень диска
+    if ($Forbidden.Contains($Path)) { return $false }
+    $parent = Split-Path -Parent $Path
+    if ($parent -and ($parent.TrimEnd('\') -ieq $UsersRoot.TrimEnd('\'))) { return $false }  # корень профиля
+    return $true
+}
+
+function Get-UserProfilePaths {
+    $list = @()
+    try {
+        $list = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop |
+            Where-Object { -not $_.Special -and $_.LocalPath -and (Test-Path -LiteralPath $_.LocalPath) } |
+            ForEach-Object { $_.LocalPath })
+    } catch {
+        $list = @(Get-ChildItem -LiteralPath $UsersRoot -Directory -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notin @('Public', 'Default', 'Default User', 'All Users') } |
+            ForEach-Object { $_.FullName })
+    }
+    return @($list | Sort-Object -Unique)
+}
+
+function Get-ExclusionTargets {
+    $found = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
+
+    $add = {
+        param([string]$Path, [string]$Source, [bool]$AllowMissing)
+        $n = Get-NormalizedPath $Path
+        if (-not $n) { return }
+        if (-not (Test-SafeExclusionPath $n)) {
+            Write-AutodeskLog "Пропущен слишком широкий путь ($Source): $n" WARN
+            return
+        }
+        if (-not $AllowMissing -and -not (Test-Path -LiteralPath $n -PathType Container)) { return }
+        if (-not $found.ContainsKey($n)) { $found[$n] = $Source }
+    }
+
+    # 1. Стандартные каталоги
+    @(
+        "$PF\Autodesk", "$PF86\Autodesk",
+        "$PF\Common Files\Autodesk Shared", "$PF86\Common Files\Autodesk Shared",
+        "$PF\Common Files\Macrovision Shared\FLEXnet Publisher",
+        "$PF86\Common Files\Macrovision Shared\FLEXnet Publisher",
+        "$PD\Autodesk", "$PD\FLEXnet"
+    ) | ForEach-Object { & $add $_ 'стандартный' $false }
+
+    # 2. Каталоги верхнего уровня с Autodesk / Revit / pyRevit в имени
+    foreach ($root in @($PF, $PF86, $PD)) {
+        if (-not $root -or -not (Test-Path -LiteralPath $root)) { continue }
+        Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match $NamePattern } |
+            ForEach-Object { & $add $_.FullName 'поиск по имени' $false }
+    }
+
+    # 3. Места установки из реестра (машина + все загруженные профили)
+    $uninstallKeys = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'Registry::HKEY_USERS\*\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    foreach ($key in $uninstallKeys) {
+        try {
+            Get-ItemProperty -Path $key -ErrorAction SilentlyContinue |
+                Where-Object {
+                    ($_.PSObject.Properties['Publisher'] -and $_.Publisher -match 'Autodesk') -or
+                    ($_.PSObject.Properties['DisplayName'] -and $_.DisplayName -match $NamePattern)
+                } |
+                ForEach-Object {
+                    if ($_.PSObject.Properties['InstallLocation'] -and $_.InstallLocation) {
+                        & $add $_.InstallLocation 'реестр' $false
+                    }
+                }
+        } catch {}
+    }
+
+    # 4. Профили ВСЕХ пользователей (а не только того, кто запустил скрипт)
+    foreach ($prof in Get-UserProfilePaths) {
+        $who = "профиль $(Split-Path -Leaf $prof)"
+        @(
+            'AppData\Roaming\Autodesk', 'AppData\Local\Autodesk',
+            'AppData\Roaming\pyRevit', 'AppData\Roaming\pyRevit-Master', 'AppData\Local\pyRevit',
+            'DC'   # Autodesk Desktop Connector
+        ) | ForEach-Object { & $add (Join-Path $prof $_) $who $false }
+
+        foreach ($sub in @('AppData\Roaming', 'AppData\Local')) {
+            $r = Join-Path $prof $sub
+            if (-not (Test-Path -LiteralPath $r)) { continue }
+            Get-ChildItem -LiteralPath $r -Directory -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match $NamePattern } |
+                ForEach-Object { & $add $_.FullName $who $false }
+        }
+    }
+
+    # 5. Пользовательские пути из ExtraPaths.txt (могут не существовать локально, например UNC)
+    if (Test-Path -LiteralPath $ExtraFile) {
+        Get-Content -LiteralPath $ExtraFile -Encoding UTF8 |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -and -not $_.StartsWith('#') } |
+            ForEach-Object { & $add $_ 'ExtraPaths.txt' $true }
+    }
+
+    # Убрать вложенные пути: если исключён родитель, дочерний не нужен
+    $result = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($p in ($found.Keys | Sort-Object { $_.Length }, { $_ })) {
+        $covered = $false
+        foreach ($k in $result.Keys) {
+            if ($p.StartsWith($k + '\', [StringComparison]::OrdinalIgnoreCase)) { $covered = $true; break }
+        }
+        if (-not $covered) { $result[$p] = $found[$p] }
+    }
+    return $result
+}
+
+# ------------------------------------------------------------------
+# Defender
+# ------------------------------------------------------------------
+function Test-DefenderReady {
+    $ok = $true
+    try {
+        $st = Get-MpComputerStatus -ErrorAction Stop
+        if ($st.PSObject.Properties['AMRunningMode'] -and $st.AMRunningMode -and $st.AMRunningMode -ne 'Normal') {
+            Write-AutodeskLog "Defender в режиме '$($st.AMRunningMode)' - вероятно, установлен сторонний антивирус. Исключения Autodesk нужно добавить и в него." WARN
+        }
+        if (-not $st.AntivirusEnabled) {
+            Write-AutodeskLog 'Антивирус Defender выключен. Исключения сохранятся и начнут действовать после его включения.' WARN
+        }
+    } catch {
+        Write-AutodeskLog "Служба Defender недоступна: $($_.Exception.Message)" ERROR
+        $ok = $false
+    }
+    try {
+        $v = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender' -Name DisableLocalAdminMerge -ErrorAction Stop).DisableLocalAdminMerge
+        if ($v -eq 1) {
+            Write-AutodeskLog 'Включена политика DisableLocalAdminMerge: локальные исключения игнорируются. Задайте их через GPO/Intune.' WARN
+        }
+    } catch {}
+    return $ok
+}
+
+function Get-CurrentExclusions {
+    $pref = Get-MpPreference -ErrorAction Stop
+    $paths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $procs = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    @($pref.ExclusionPath)    | Where-Object { $_ } | ForEach-Object { [void]$paths.Add($_.TrimEnd('\')) }
+    @($pref.ExclusionProcess) | Where-Object { $_ } | ForEach-Object { [void]$procs.Add($_) }
+    return [pscustomobject]@{ Paths = $paths; Processes = $procs }
+}
+
+# ------------------------------------------------------------------
+# Учёт добавленного скриптом
+# ------------------------------------------------------------------
+function Read-State {
+    $paths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $procs = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($f in @($StateFile, $LegacyMarker)) {
+        if (-not (Test-Path -LiteralPath $f)) { continue }
+        try {
+            $j = Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json
+            @($j.Paths)     | Where-Object { $_ } | ForEach-Object { [void]$paths.Add(([string]$_).TrimEnd('\')) }
+            @($j.Processes) | Where-Object { $_ } | ForEach-Object { [void]$procs.Add([string]$_) }
+        } catch {
+            throw "Не удалось прочитать файл учёта $f : $($_.Exception.Message)"
+        }
+    }
+    return [pscustomobject]@{ Paths = $paths; Processes = $procs }
+}
+
+function Save-State {
+    param($Paths, $Processes)
+    if ($Script:Ctx.DryRun) { return }
+    if (-not (Test-Path -LiteralPath $StateDir)) {
+        New-Item -ItemType Directory -Path $StateDir -Force -ErrorAction Stop | Out-Null
+    }
+    if (-not $Paths.Count -and -not $Processes.Count) {
+        Remove-Item -LiteralPath $StateFile -Force -ErrorAction SilentlyContinue
+        return
+    }
+    [ordered]@{
+        Paths     = @($Paths | Sort-Object)
+        Processes = @($Processes | Sort-Object)
+        Updated   = (Get-Date).ToString('o')
+        Computer  = $env:COMPUTERNAME
+    } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $StateFile -Encoding UTF8
+}
+
+# ------------------------------------------------------------------
+# Сеть AutoCAD / Revit и всех найденных EXE Autodesk.
+# Отдельные правила AutoCAD / Revit действуют в Public; общий режим — во всех профилях.
+# ------------------------------------------------------------------
+$FirewallPrefix = 'ADE-NET'
+$ProductExeNames = [ordered]@{
+    'AutoCAD' = @('acad.exe','accoreconsole.exe')
+    'Revit'   = @('Revit.exe','RevitWorker.exe')
+}
+
+function Get-ProductExecutables {
+    param([ValidateSet('AutoCAD','Revit')][string]$Product)
+    $names = $ProductExeNames[$Product]
+    $roots = @($PF, $PF86) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    $result = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+
+    # Running processes give us exact paths cheaply.
+    foreach ($n in $names) {
+        $base = [IO.Path]::GetFileNameWithoutExtension($n)
+        Get-Process -Name $base -ErrorAction SilentlyContinue | ForEach-Object {
+            try { if ($_.Path) { [void]$result.Add($_.Path) } } catch {}
+        }
+    }
+
+    # Search Autodesk installation trees, not the whole disk.
+    foreach ($root in $roots) {
+        foreach ($candidate in @((Join-Path $root 'Autodesk'), (Join-Path $root 'Autodesk\AutoCAD*'), (Join-Path $root 'Autodesk\Revit*'))) {
+            Get-ChildItem -Path $candidate -File -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $names -contains $_.Name } |
+                ForEach-Object { [void]$result.Add($_.FullName) }
+        }
+    }
+    return @($result | Sort-Object)
+}
+
+function Get-NetRuleName {
+    param([string]$Product, [string]$Path)
+    return "$FirewallPrefix-$Product-$(Get-AllRuleName $Path)-PUBLIC"
+}
+
+function Get-NetworkStatus {
+    param([ValidateSet('AutoCAD','Revit')][string]$Product)
+    $exe = @(Get-ProductExecutables $Product)
+    $rules = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Group -eq 'Autodesk Defender Exclusions - Network' -and $_.DisplayName -like "$FirewallPrefix-$Product-*" })
+    $enabled = @($rules | Where-Object { $_.Enabled -eq 'True' }).Count
+    [pscustomobject]@{
+        Product=$Product; Executables=$exe; Rules=$rules; EnabledRules=$enabled
+        State = if (-not $exe.Count) {'НЕ НАЙДЕН'} elseif ($enabled -gt 0) {'PUBLIC: БЛОК'} else {'PUBLIC: НЕТ'}
+    }
+}
+
+function Set-ProductInternet {
+    param(
+        [ValidateSet('AutoCAD','Revit')][string]$Product,
+        [bool]$Block
+    )
+    $exe = @(Get-ProductExecutables $Product)
+    if ($Block -and -not $exe.Count) { Write-AutodeskLog "${Product}: исполняемые файлы не найдены." WARN; return }
+
+    foreach ($path in $exe) { Write-Info "${Product}: $path" }
+    if (Test-DryRun "${Product}: блокировка Public = $Block") { return }
+    if (-not (Assert-Admin)) { return }
+    if (-not (Confirm-Action -Question "${Product}: блокировка Public = $Block ?" -Danger)) { return }
+    if ($Block) {
+        foreach ($path in $exe) {
+            $name = Get-NetRuleName $Product $path
+            try {
+                Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue | Where-Object { $_.Group -eq 'Autodesk Defender Exclusions - Network' } | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+                # Правило блокирует весь исходящий трафик профиля Public; Private/Domain не затрагивает.
+                New-NetFirewallRule -DisplayName $name -Group 'Autodesk Defender Exclusions - Network' `
+                    -Direction Outbound -Action Block -Program $path -Profile Public -Enabled True `
+                    -Description "Managed by Autodesk_Defender_Exclusions.ps1. Blocks $Product on Public networks only." | Out-Null
+                Write-AutodeskLog "${Product}: Интернет заблокирован (Public): $path" OK
+            } catch { Write-AutodeskLog "${Product}: не удалось создать правило для '$path': $($_.Exception.Message)" ERROR }
+        }
+    } else {
+        try {
+            Get-NetFirewallRule -ErrorAction SilentlyContinue |
+                Where-Object { $_.Group -eq 'Autodesk Defender Exclusions - Network' -and $_.DisplayName -like "$FirewallPrefix-$Product-*" } |
+                Remove-NetFirewallRule -ErrorAction Stop
+            Write-AutodeskLog "${Product}: правила Public этого скрипта удалены." OK
+        } catch { Write-AutodeskLog "${Product}: ошибка удаления сетевых правил: $($_.Exception.Message)" ERROR }
+    }
+}
+
+function Show-NetworkStatus {
+    Write-Host "`n=== СЕТЬ AUTODESK ===" -ForegroundColor Cyan
+    foreach ($product in @('AutoCAD','Revit')) {
+        $st = Get-NetworkStatus $product
+        $color = if ($st.State -eq 'PUBLIC: БЛОК') {'Yellow'} elseif ($st.State -eq 'PUBLIC: НЕТ') {'Green'} else {'DarkGray'}
+        Write-Host ("  {0,-8} : {1,-14} | найдено EXE: {2} | правил: {3}" -f $product,$st.State,$st.Executables.Count,$st.EnabledRules) -ForegroundColor $color
+    }
+    $allRules = @(Get-NetFirewallRule -Group $AllFirewallGroup -ErrorAction SilentlyContinue)
+    Write-Host ("  Все Autodesk: активных правил {0} (все профили)" -f @($allRules | Where-Object { $_.Enabled -eq 'True' }).Count) -ForegroundColor Cyan
+    Write-Host '  Отдельные правила AutoCAD / Revit действуют только в профиле Public.' -ForegroundColor DarkGray
+}
+
+$AllFirewallGroup = 'Autodesk Control Center - All Network'
+
+function Get-AllAutodeskExecutables {
+    $paths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $roots = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    # C:\Autodesk обычно содержит распакованные установщики, включая сторонние EXE.
+    foreach ($base in @($PF, $PF86, $PD)) {
+        if (-not $base -or -not (Test-Path -LiteralPath $base -PathType Container)) { continue }
+        Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^(Autodesk|AutoCAD|Revit|3ds Max|Inventor|Maya|Navisworks|Adsk)' } |
+            ForEach-Object { [void]$roots.Add($_.FullName) }
+    }
+    foreach ($base in @($PF, $PF86)) {
+        foreach ($name in @('Common Files\Autodesk Shared', 'Common Files\Autodesk')) {
+            $folder = Join-Path $base $name
+            if (Test-Path -LiteralPath $folder -PathType Container) { [void]$roots.Add($folder) }
+        }
+    }
+    foreach ($profile in Get-UserProfilePaths) {
+        foreach ($name in @('AppData\Local\Autodesk', 'AppData\Roaming\Autodesk', 'AppData\Local\pyRevit', 'AppData\Roaming\pyRevit', 'DC')) {
+            $folder = Join-Path $profile $name
+            if (Test-Path -LiteralPath $folder -PathType Container) { [void]$roots.Add($folder) }
+        }
+    }
+    foreach ($root in $roots) {
+        Get-ChildItem -LiteralPath $root -Filter '*.exe' -File -Recurse -ErrorAction SilentlyContinue |
+            ForEach-Object { [void]$paths.Add($_.FullName) }
+    }
+    return @($paths | Sort-Object)
+}
+
+function Get-AllRuleName {
+    param([string]$Path)
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Path.ToUpperInvariant())
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $hash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '') }
+    finally { $sha.Dispose() }
+    return "ADE-ALL-$($hash.Substring(0, 32))"
+}
+
+function Set-AllAutodeskInternet {
+    param([bool]$Block)
+    if ($Block) {
+        foreach ($path in @(Get-AllAutodeskExecutables)) { Write-Info "EXE: $path" }
+    }
+    if (Test-DryRun "все Autodesk: блокировка входящего и исходящего трафика во всех профилях = $Block") { return }
+    if (-not (Assert-Admin)) { return }
+    if (-not (Confirm-Action -Question "Все Autodesk: блокировка всех сетевых профилей = $Block ?" -Danger)) { return }
+    if (-not $Block) {
+        $rules = @(Get-NetFirewallRule -Group $AllFirewallGroup -ErrorAction SilentlyContinue) +
+                 @(Get-NetFirewallRule -Group 'Autodesk Defender Exclusions - Network' -ErrorAction SilentlyContinue |
+                     Where-Object { $_.DisplayName -like "$FirewallPrefix-*" })
+        foreach ($rule in $rules) {
+            try { $rule | Remove-NetFirewallRule -ErrorAction Stop; Write-AutodeskLog "Удалено сетевое правило: $($rule.DisplayName)" OK }
+            catch { Write-AutodeskLog "Ошибка удаления правила '$($rule.DisplayName)': $($_.Exception.Message)" ERROR }
+        }
+        if (-not $rules.Count) { Write-AutodeskLog 'Сетевых правил этого скрипта нет.' INFO }
+        return
+    }
+    $executables = @(Get-AllAutodeskExecutables)
+    if (-not $executables.Count) { Write-AutodeskLog 'Исполняемые файлы Autodesk не найдены.' WARN; return }
+    Write-Host ("`nНайдено программ Autodesk: {0}. Создаю правила для всех сетевых профилей..." -f $executables.Count) -ForegroundColor Cyan
+    $added = 0
+    $failed = 0
+    foreach ($path in $executables) {
+        # Как в Fab: блок и исходящих, и входящих соединений.
+        foreach ($dir in @('Outbound', 'Inbound')) {
+            $name = Get-AllRuleName $path
+            if ($dir -eq 'Inbound') { $name = $name -replace '^ADE-ALL-', 'ADE-ALL-IN-' }
+            try {
+                $existing = Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
+                if ($existing) {
+                    if ($existing.Group -ne $AllFirewallGroup) { throw 'Совпало имя чужого правила; оно не изменено.' }
+                    $existing | Set-NetFirewallRule -Profile Any -Action Block -Enabled True -ErrorAction Stop
+                    continue
+                }
+                New-NetFirewallRule -Name $name -DisplayName "Autodesk - $([IO.Path]::GetFileName($path))" -Group $AllFirewallGroup `
+                    -Direction $dir -Action Block -Program $path -Profile Any -Enabled True `
+                    -Description "Managed by Autodesk Control Center. Blocks $dir network traffic on all profiles." -ErrorAction Stop | Out-Null
+                $added++
+            } catch { Write-AutodeskLog "Ошибка правила ($dir) для '$path': $($_.Exception.Message)" ERROR; $failed++ }
+        }
+    }
+    $level = if ($failed) { 'WARN' } else { 'OK' }
+    Write-AutodeskLog ("Готово: найдено {0}, новых правил {1}, ошибок {2}. Повторите после установки новых версий Autodesk." -f $executables.Count, $added, $failed) $level
+}
+
+# Firewall App Blocker (sordum.org) из папки рядом со скриптом. Видит и правила этого скрипта.
+function Start-Fab {
+    $exe = if ([Environment]::Is64BitOperatingSystem) { 'Fab_x64.exe' } else { 'Fab.exe' }
+    $fab = Get-ChildItem -LiteralPath $ScriptRoot -Directory -Filter 'Fab*' -ErrorAction SilentlyContinue |
+        ForEach-Object { Join-Path $_.FullName $exe } |
+        Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $fab) { Write-AutodeskLog "Fab не найден: ожидается папка 'Fab*\$exe' рядом со скриптом." WARN; return }
+    if (Test-DryRun "запуск FAB: $fab") { return }
+    if (-not (Assert-Admin)) { return }
+    Start-Process -FilePath $fab -WorkingDirectory (Split-Path -Parent $fab)
+    Write-AutodeskLog "Запущен Fab: $fab"
+}
+
+function Invoke-Install {
+    if (-not $Script:Ctx.DryRun -and -not (Assert-Admin)) { return }
+    if (-not (Test-DefenderReady)) { return }
+
+    Write-Host "`nПоиск каталогов Autodesk..." -ForegroundColor Cyan
+    $targets = Get-ExclusionTargets
+    foreach ($p in ($targets.Keys | Sort-Object)) { Write-Info "Каталог: $p" }
+    foreach ($p in $ProcessList) { Write-Info "Процесс: $p" }
+    if (Test-DryRun 'добавление недостающих исключений Autodesk') { return }
+    if (-not (Confirm-Action -Question 'Добавить исключения Autodesk? Проверка этих каталогов и файлов процессов будет отключена.' -Danger)) { return }
+
+    $current = Get-CurrentExclusions
+    $state   = Read-State
+
+    $added = 0; $exists = 0; $failed = 0
+
+    Write-Host "`n--- Каталоги ($($targets.Count)) ---" -ForegroundColor Cyan
+    foreach ($p in $targets.Keys) {
+        if ($current.Paths.Contains($p)) {
+            Write-AutodeskLog "Уже есть: $p"
+            $exists++
+            continue
+        }
+        try {
+            Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+            [void]$state.Paths.Add($p); Save-State $state.Paths $state.Processes
+            Write-AutodeskLog "Добавлен каталог [$($targets[$p])]: $p" OK
+            $added++
+        } catch {
+            Write-AutodeskLog "Ошибка добавления каталога '$p': $($_.Exception.Message)" ERROR
+            $failed++
+        }
+    }
+
+    Write-Host "`n--- Процессы ($($ProcessList.Count)) ---" -ForegroundColor Cyan
+    foreach ($proc in $ProcessList) {
+        if ($current.Processes.Contains($proc)) {
+            Write-AutodeskLog "Уже есть: $proc"
+            $exists++
+            continue
+        }
+        try {
+            Add-MpPreference -ExclusionProcess $proc -ErrorAction Stop
+            [void]$state.Processes.Add($proc); Save-State $state.Paths $state.Processes
+            Write-AutodeskLog "Добавлен процесс: $proc" OK
+            $added++
+        } catch {
+            Write-AutodeskLog "Ошибка добавления процесса '$proc': $($_.Exception.Message)" ERROR
+            $failed++
+        }
+    }
+
+    Save-State $state.Paths $state.Processes
+    if (Test-Path -LiteralPath $LegacyMarker) {
+        Remove-Item -LiteralPath $LegacyMarker -Force -ErrorAction SilentlyContinue
+        Write-AutodeskLog 'Старый файл учёта рядом со скриптом перенесён в ProgramData.'
+    }
+
+    # Контрольная проверка
+    $after = Get-CurrentExclusions
+    $missing = @($targets.Keys | Where-Object { -not $after.Paths.Contains($_) }) +
+               @($ProcessList  | Where-Object { -not $after.Processes.Contains($_) })
+
+    Write-Host ''
+    Write-AutodeskLog ("Итог: добавлено {0}, уже было {1}, ошибок {2}." -f $added, $exists, $failed) $(if ($failed) { 'WARN' } else { 'OK' })
+    if ($missing.Count) {
+        Write-AutodeskLog "После установки не применились: $($missing -join '; ')" ERROR
+    } else {
+        Write-AutodeskLog 'Проверка пройдена: все исключения Autodesk активны.' OK
+    }
+}
+
+function Invoke-Check {
+    [void](Test-DefenderReady)
+    $targets = Get-ExclusionTargets
+    $current = Get-CurrentExclusions
+    $state   = Read-State
+    $miss = 0
+
+    Write-Host "`n=== Каталоги Autodesk ===" -ForegroundColor Cyan
+    foreach ($p in $targets.Keys) {
+        if ($current.Paths.Contains($p)) { Write-Host "  [OK]  $p" -ForegroundColor Green }
+        else { Write-Host "  [НЕТ] $p" -ForegroundColor Yellow; $miss++ }
+    }
+
+    Write-Host "`n=== Процессы Autodesk ===" -ForegroundColor Cyan
+    foreach ($proc in $ProcessList) {
+        if ($current.Processes.Contains($proc)) { Write-Host "  [OK]  $proc" -ForegroundColor Green }
+        else { Write-Host "  [НЕТ] $proc" -ForegroundColor Yellow; $miss++ }
+    }
+
+    $otherPaths = @($current.Paths | Where-Object { -not $targets.ContainsKey($_) } | Sort-Object)
+    $otherProcs = @($current.Processes | Where-Object { $ProcessList -notcontains $_ } | Sort-Object)
+    if ($otherPaths.Count -or $otherProcs.Count) {
+        Write-Host "`n=== Прочие исключения Defender ===" -ForegroundColor DarkCyan
+        $otherPaths | ForEach-Object { Write-Host "  $_" }
+        $otherProcs | ForEach-Object { Write-Host "  $_ (процесс)" }
+    }
+
+    Write-Host ''
+    if ($miss) { Write-Host "Не хватает исключений: $miss. Выполните установку (пункт 1)." -ForegroundColor Yellow }
+    else       { Write-Host 'Все исключения Autodesk на месте.' -ForegroundColor Green }
+    Write-Host ("Добавлено этим скриптом: каталогов {0}, процессов {1}. Учёт: {2}" -f $state.Paths.Count, $state.Processes.Count, $StateFile) -ForegroundColor DarkGray
+}
+
+function Invoke-Remove {
+    if (-not $Script:Ctx.DryRun -and -not (Assert-Admin)) { return }
+    $state = Read-State
+    if (-not $state.Paths.Count -and -not $state.Processes.Count) {
+        Write-AutodeskLog 'Нет исключений, добавленных этим скриптом. Чужие исключения не трогаю.' WARN
+        return
+    }
+
+    foreach ($p in $state.Paths) { Write-Info "Удалить каталог: $p" }
+    foreach ($p in $state.Processes) { Write-Info "Удалить процесс: $p" }
+    if (Test-DryRun 'удаление только учтённых исключений Autodesk') { return }
+    if (-not (Confirm-Action -Question 'Удалить учтённые исключения Autodesk?')) { return }
+
+    $leftPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $leftProcs = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($p in @($state.Paths)) {
+        try {
+            Remove-MpPreference -ExclusionPath $p -ErrorAction Stop
+            Write-AutodeskLog "Удалён каталог: $p" OK
+        } catch {
+            Write-AutodeskLog "Не удалось удалить каталог '$p': $($_.Exception.Message)" ERROR
+            [void]$leftPaths.Add($p)
+        }
+    }
+    foreach ($p in @($state.Processes)) {
+        try {
+            Remove-MpPreference -ExclusionProcess $p -ErrorAction Stop
+            Write-AutodeskLog "Удалён процесс: $p" OK
+        } catch {
+            Write-AutodeskLog "Не удалось удалить процесс '$p': $($_.Exception.Message)" ERROR
+            [void]$leftProcs.Add($p)
+        }
+    }
+
+    Save-State $leftPaths $leftProcs     # неудалённое остаётся в учёте для повторной попытки
+    Remove-Item -LiteralPath $LegacyMarker -Force -ErrorAction SilentlyContinue
+
+    if ($leftPaths.Count -or $leftProcs.Count) {
+        Write-AutodeskLog 'Удалено не всё - повторите удаление позже.' WARN
+    } else {
+        Write-AutodeskLog 'Удалены все исключения, добавленные этим скриптом.' OK
+    }
+}
+
+
+    $items = @(
+        [pscustomobject]@{ Key='1'; Title='Добавить исключения Defender'; Desc='Каталоги, профили пользователей, процессы Autodesk' },
+        [pscustomobject]@{ Key='2'; Title='Проверить исключения'; Desc='Найденные, отсутствующие и сторонние исключения' },
+        [pscustomobject]@{ Key='3'; Title='Удалить учтённые исключения'; Desc='Только добавленные этим скриптом или исходной утилитой' },
+        [pscustomobject]@{ Key='4'; Title='Состояние сети'; Desc='Правила Autodesk в Windows Firewall' },
+        [pscustomobject]@{ Key='5'; Title='AutoCAD: блокировать Public'; Desc='Исходящий трафик' },
+        [pscustomobject]@{ Key='6'; Title='AutoCAD: удалить правила Public'; Desc='Удаление блокировок утилиты' },
+        [pscustomobject]@{ Key='7'; Title='Revit: блокировать Public'; Desc='Исходящий трафик' },
+        [pscustomobject]@{ Key='8'; Title='Revit: удалить правила Public'; Desc='Удаление блокировок утилиты' },
+        [pscustomobject]@{ Key='a'; Title='Все Autodesk: блокировать сеть'; Desc='Все найденные EXE, оба направления, все профили' },
+        [pscustomobject]@{ Key='b'; Title='Все Autodesk: удалить блокировки'; Desc='Только правила утилиты' },
+        [pscustomobject]@{ Key='f'; Title='Открыть Firewall App Blocker'; Desc='Необязательно: папка Fab* рядом со скриптом' }
+    )
+    while ($true) {
+        $choice = Show-Menu -Items $items -Title 'Autodesk: Defender и сеть' -BackText 'Назад'
+        if ($choice -eq '0') { return }
+        try {
+            switch ($choice) {
+                '1' { Invoke-Install }
+                '2' { Invoke-Check }
+                '3' { Invoke-Remove }
+                '4' { Show-NetworkStatus }
+                '5' { Set-ProductInternet AutoCAD $true }
+                '6' { Set-ProductInternet AutoCAD $false }
+                '7' { Set-ProductInternet Revit $true }
+                '8' { Set-ProductInternet Revit $false }
+                'a' { Set-AllAutodeskInternet $true }
+                'b' { Set-AllAutodeskInternet $false }
+                'f' { Start-Fab }
+            }
+        } catch { Write-AutodeskLog $_.Exception.Message ERROR }
+        Wait-Menu
+    }
+}
+
 function Invoke-SettingsMenu {
     while ($true) {
         $dryText = if ($Script:Ctx.DryRun) { 'включён' } else { 'выключен' }
@@ -1897,6 +2545,7 @@ function Invoke-ModuleByKey {
         'accel'    { Invoke-ModuleAccelerator }
         'clean'    { Invoke-ModuleClean }
         'backups'  { Invoke-ModuleBackups }
+        'autodesk' { Invoke-ModuleAutodesk }
     }
 }
 
@@ -1908,11 +2557,12 @@ function Invoke-MainMenu {
         [pscustomobject]@{ Key = '4'; Title = 'Revit Server Accelerator'; Desc = 'Переменные RSACCELERATOR2018-2026' },
         [pscustomobject]@{ Key = '5'; Title = 'Очистка Revit'; Desc = 'Следы установки, реестр, AdskLicensing' },
         [pscustomobject]@{ Key = '6'; Title = 'Backup-папки и журналы'; Desc = 'Поиск *_backup с парным .rvt, старые журналы, CSV-отчёт' },
+        [pscustomobject]@{ Key = '7'; Title = 'Autodesk: Defender и сеть'; Desc = 'Исключения, откат, сетевые блокировки, FAB' },
         [pscustomobject]@{ Key = '9'; Title = 'Настройки сессии'; Desc = 'Сухой прогон, подтверждения, логи' }
     )
 
     $map = @{
-        '1' = 'status'; '2' = 'iis'; '3' = 'maxbytes'; '4' = 'accel'; '5' = 'clean'; '6' = 'backups'
+        '1' = 'status'; '2' = 'iis'; '3' = 'maxbytes'; '4' = 'accel'; '5' = 'clean'; '6' = 'backups'; '7' = 'autodesk'
     }
 
     while ($true) {
