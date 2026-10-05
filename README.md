@@ -4,7 +4,7 @@
 Объединяет утилиты обслуживания, настройки Defender и сетевые правила Autodesk в один файл с общим UI, логом и режимом сухого прогона.
 
 ```
-  Revit Toolkit v1.1.0 · SRV-BIM01 · PS 5.1.19041.4648 · admin
+  Revit Toolkit v1.2.0 · SRV-BIM01 · PS 5.1.19041.4648 · admin
   Стрелки + Enter или номер пункта · 0 — назад/выход
   ──────────────────────────────────────────────────────────────
 
@@ -154,6 +154,10 @@ Offline check: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test-P
 Штатное удаление теперь использует `/qn` после подтверждения в терминале: MSI не открывает повторный запрос удаления или диалог поиска исходного файла. Ошибки отсутствующего источника 1612/1706 направляют к пункту 3; удаление не объявляется успешным.
 
 English: If the original `PACR.msi` is missing, select **p → 3** for official Microsoft recovery guidance and the installed ProductCode. Select only Personal Accelerator in the troubleshooter. Recovery may repair/remove registration without the source package, but does not guarantee full file cleanup. The separate Microsoft tool is documented for Windows 10 and may be unavailable on newer Windows 11. Normal uninstall uses `/qn` after terminal confirmation, so missing sources produce an error instead of an MSI source dialog.
+
+Версия **1.2.0** добавляет **p → 4 — Скачать и запустить средство Microsoft**. Скрипт скачивает официальный диагностический пакет, проверяет закреплённый SHA256 и действительную подпись Microsoft, затем запускает мастер MSDT. Выберите **Uninstalling → Personal Accelerator for Revit**, при необходимости используйте показанный ProductCode. После закрытия мастера скрипт проверит наличие записи. Доступность MSDT зависит от версии Windows; если средство не поддерживается, используйте актуальные инструкции пункта 3. Если в вашем меню только пункты 1 и 2, вы запускаете старую копию: скачайте свежий `RevitToolkit.ps1` из `main`. Название версии видно в шапке.
+
+English: Version **1.2.0**, **p → 4**, downloads the official Microsoft diagnostic package, checks its pinned SHA256 and Microsoft signature, then launches the interactive MSDT wizard. Select only Personal Accelerator. The registration is checked afterwards; complete file removal is not assumed. MSDT support depends on Windows version. A menu with only options 1 and 2 indicates an old script copy.
 
 ### Антивирусы / Antivirus
 

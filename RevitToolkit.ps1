@@ -64,7 +64,7 @@ $ErrorActionPreference = 'Stop'
 # ============================================================================
 
 $Script:AppName    = 'Revit Toolkit'
-$Script:AppVersion = '1.1.0'
+$Script:AppVersion = '1.2.0'
 $Script:Root       = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $Script:UiLanguage = 'ru'
 $Script:LanguageFile = Join-Path $env:LOCALAPPDATA 'RevitToolkit\language.txt'
@@ -1303,12 +1303,46 @@ function Show-PersonalAcceleratorRecovery {
     Start-Process -FilePath $url -ErrorAction Stop
 }
 
+function Start-PersonalAcceleratorTroubleshooter {
+    $entries=@(Get-PersonalAcceleratorEntry)
+    foreach ($entry in $entries) { Write-Info "$($entry.DisplayName) / ProductCode=$($entry.ProductCode)" }
+    if (Test-DryRun (Get-UiText 'скачивание, проверка подписи Microsoft и запуск средства исправления установки/удаления' 'download, verify Microsoft signature and launch the install/uninstall troubleshooter')) { return }
+    if (-not $entries.Count) { Write-Info (Get-UiText 'Установленная запись Personal Accelerator не найдена.' 'No installed Personal Accelerator registration found.'); return }
+    if (-not (Assert-Admin)) { return }
+    if (@(Get-Process -Name Revit -ErrorAction SilentlyContinue).Count) { throw (Get-UiText 'Сохраните работу и закройте Revit перед исправлением записи MSI.' 'Save your work and close Revit before repairing MSI registration.') }
+    $msdt=Join-Path $env:WINDIR 'System32\msdt.exe'
+    if (-not (Test-Path -LiteralPath $msdt -PathType Leaf)) { Write-Warn (Get-UiText 'MSDT отсутствует в этой Windows. Откроется актуальная инструкция Microsoft.' 'MSDT is unavailable on this Windows version. Opening current Microsoft guidance.'); Show-PersonalAcceleratorRecovery; return }
+    Write-Warn (Get-UiText 'В мастере выберите Uninstalling и только Personal Accelerator for Revit. Исправление записи не гарантирует удаления всех файлов. На новых Windows 11 MSDT может не поддерживаться.' 'In the wizard select Uninstalling and only Personal Accelerator for Revit. Registration repair does not guarantee removal of every file. MSDT may be unsupported on newer Windows 11.')
+    if (-not (Confirm-Action -Question (Get-UiText 'Скачать и открыть официальное средство Microsoft?' 'Download and open the official Microsoft troubleshooter?'))) { return }
+    $folder=Join-Path $Script:Root 'components\MicrosoftTroubleshooter'
+    New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop | Out-Null
+    $path=Join-Path $folder 'MicrosoftProgram_Install_and_Uninstall.meta.diagcab'
+    $hash='8cad66adb36b1f4f64204a4328a063ae33695dbbd5386f761cfb56c2c0987471'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $hash) {
+        $partial=Join-Path $folder ([guid]::NewGuid().ToString('N')+'.diagcab')
+        try {
+            [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri 'https://download.microsoft.com/download/7/E/9/7E9188C0-2511-4B01-8B4E-0A641EC2F600/MicrosoftProgram_Install_and_Uninstall.meta.diagcab' -UseBasicParsing -OutFile $partial -TimeoutSec 120 -ErrorAction Stop | Out-Null
+            if ((Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash -ine $hash) { throw 'Microsoft troubleshooter SHA256 mismatch' }
+            Move-Item -LiteralPath $partial -Destination $path -Force -ErrorAction Stop
+        } finally { if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force -ErrorAction Stop } }
+    }
+    $signature=Get-AuthenticodeSignature -LiteralPath $path -ErrorAction Stop
+    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(?i)(?:^|,\s*)O=Microsoft Corporation(?:,|$)') { throw 'Invalid Microsoft troubleshooter signature' }
+    $process=Start-Process -FilePath $msdt -ArgumentList @('/cab', ('"'+$path+'"')) -Wait -PassThru -ErrorAction Stop
+    if ($process.ExitCode -ne 0) { Write-Warn (Get-UiText "Средство завершилось с кодом $($process.ExitCode). Проверьте сообщения мастера; для этой Windows используйте пункт 3." "The tool exited with code $($process.ExitCode). Check its messages; use option 3 for this Windows version.") }
+    $remaining=@(Get-PersonalAcceleratorEntry)
+    if ($remaining.Count) { Write-Warn (Get-UiText 'Запись Personal Accelerator ещё существует. Удаление не подтверждено.' 'Personal Accelerator registration still exists. Removal is not confirmed.') }
+    else { Write-Info (Get-UiText 'Запись Personal Accelerator больше не найдена. Это не проверка удаления всех файлов.' 'Personal Accelerator registration is no longer found. This does not verify removal of every file.') }
+}
+
 function Invoke-ModulePersonalAccelerator {
     while ($true) {
         $items = @(
             [pscustomobject]@{Key='1';Title=(Get-UiText 'Показать установленные версии' 'Show installed versions');Desc='Personal Accelerator for Revit'},
             [pscustomobject]@{Key='2';Title=(Get-UiText 'Удалить Personal Accelerator' 'Uninstall Personal Accelerator');Desc=(Get-UiText 'Штатный MSI, проверка результата, журнал; без автоматической перезагрузки' 'Registered MSI, result verification, log; no automatic restart')},
-            [pscustomobject]@{Key='3';Title=(Get-UiText 'Нет PACR.msi: помощь Microsoft' 'Missing PACR.msi: Microsoft recovery');Desc=(Get-UiText 'Официальное средство исправления MSI-записи; исходный пакет может не понадобиться' 'Official MSI registration recovery tool; the original package may not be needed')}
+            [pscustomobject]@{Key='3';Title=(Get-UiText 'Нет PACR.msi: помощь Microsoft' 'Missing PACR.msi: Microsoft recovery');Desc=(Get-UiText 'Официальное средство исправления MSI-записи; исходный пакет может не понадобиться' 'Official MSI registration recovery tool; the original package may not be needed')},
+            [pscustomobject]@{Key='4';Title=(Get-UiText 'Скачать и запустить средство Microsoft' 'Download and run Microsoft troubleshooter');Desc=(Get-UiText 'Подписанный мастер исправления MSI; выбрать Personal Accelerator вручную' 'Signed MSI recovery wizard; select Personal Accelerator manually')}
         )
         $choice = Show-Menu -Items $items -Title 'Personal Accelerator for Revit' -BackText (Get-UiText 'Назад' 'Back')
         if ($choice -eq '0') { return }
@@ -1317,6 +1351,7 @@ function Invoke-ModulePersonalAccelerator {
                 '1' { $entries=@(Get-PersonalAcceleratorEntry); if (-not $entries.Count) { Write-Info (Get-UiText 'Компонент не найден.' 'Component not found.') }; foreach ($entry in $entries) { Write-Info "$($entry.DisplayName) / $($entry.DisplayVersion) / $($entry.ProductCode)" } }
                 '2' { Invoke-PersonalAcceleratorRemoval }
                 '3' { Show-PersonalAcceleratorRecovery }
+                '4' { Start-PersonalAcceleratorTroubleshooter }
             }
         } catch { Write-Fail $_.Exception.Message }
         Wait-Menu
