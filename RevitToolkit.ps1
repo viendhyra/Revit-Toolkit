@@ -3049,14 +3049,17 @@ function Get-ToolkitComponentPackage {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $asset.Sha256) {
         New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop | Out-Null
         $partial = Join-Path $folder ([guid]::NewGuid().ToString('N') + [IO.Path]::GetExtension($asset.Name))
+        $downloadProgressPreference = $ProgressPreference
         try {
+            $ProgressPreference = 'SilentlyContinue'
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             Write-Info $asset.Url
-            Invoke-WebRequest -Uri $asset.Url -UseBasicParsing -OutFile $partial -ErrorAction Stop | Out-Null
+            Invoke-WebRequest -Uri $asset.Url -UseBasicParsing -OutFile $partial -TimeoutSec 600 -ErrorAction Stop | Out-Null
             if ((Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash -ine $asset.Sha256) { throw 'Component SHA256 mismatch' }
             if ($Component -ne 'FAB') { Assert-AutodeskInstaller $partial }
             Move-Item -LiteralPath $partial -Destination $path -Force -ErrorAction Stop
         } finally {
+            $ProgressPreference = $downloadProgressPreference
             if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force -ErrorAction Stop }
         }
     }
