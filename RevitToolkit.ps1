@@ -46,6 +46,7 @@ param(
     [switch]$DryRun,
     [switch]$Yes,
     [switch]$NoColor,
+    [switch]$NoAnimation,
     [switch]$Ascii
 )
 
@@ -56,7 +57,7 @@ $ErrorActionPreference = 'Stop'
 # ============================================================================
 
 $Script:AppName    = 'Revit Toolkit'
-$Script:AppVersion = '1.0.0'
+$Script:AppVersion = '1.1.0'
 $Script:Root       = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 
 $Script:Ctx = [pscustomobject]@{
@@ -82,6 +83,7 @@ function Initialize-Console {
 
 function Enable-VirtualTerminal {
     if ($NoColor) { return $false }
+    try { if ([Console]::IsOutputRedirected) { return $false } } catch { return $false }
     if ($env:WT_SESSION) { return $true }
     if ($Host.Name -eq 'Windows PowerShell ISE Host') { return $false }
 
@@ -245,30 +247,61 @@ function Write-Kv {
 
 function Write-Bar {
     param([int]$Current, [int]$Total, [string]$Text = '')
-    if ($Total -le 0) { $Total = 1 }
-    $pct = [int](($Current / $Total) * 100)
-    if ($pct -gt 100) { $pct = 100 }
-    $cells = 28
-    $full = [int]($cells * $pct / 100)
+    $Total = [Math]::Max(1, $Total)
+    $pct = [Math]::Max(0, [Math]::Min(100, [int](100.0 * $Current / $Total)))
+    $cells = [Math]::Max(4, [Math]::Min(28, $Script:Ctx.Width - 24))
+    $full = [int][Math]::Floor($cells * $pct / 100)
     $bar = ([string]$Script:G.BarFull * $full) + ([string]$Script:G.BarEmpty * ($cells - $full))
-    $line = "  " + $Script:C.Accent + $bar + $Script:C.Reset + $Script:C.Muted + ("  {0,3}%  {1}" -f $pct, $Text) + $Script:C.Reset
-    try {
-        Write-Host ("`r" + $line + (' ' * 10)) -NoNewline
+    $label = Format-UiText $Text ([Math]::Max(1, $Script:Ctx.Width - $cells - 14))
+    $line = '  ' + $Script:C.Cyan + $bar + $Script:C.Reset + $Script:C.Text + ("  {0,3}%  {1}" -f $pct, $label) + $Script:C.Reset
+    if (Test-InteractiveKeys) {
+        $erase = if ($Script:Ctx.Vt) { "$($Script:ESC)[K" } else { ' ' * 8 }
+        Write-Host ("`r" + $line + $erase) -NoNewline
         if ($Current -ge $Total) { Write-Host '' }
+    } else { Write-Host $line }
+}
+
+function Test-AnimatedUi {
+    if ($NoAnimation -or $Ascii -or $NoColor -or -not $Script:Ctx.Vt) { return $false }
+    try { return (-not [Console]::IsOutputRedirected -and (Test-InteractiveKeys)) }
+    catch { return $false }
+}
+
+function Format-UiText {
+    param([string]$Text, [int]$Width)
+    $Width = [Math]::Max(1, $Width)
+    $Text = $Text -replace '[\x00-\x1f\x7f]', ' '
+    if ($Text.Length -le $Width) { return $Text }
+    if ($Width -le 3) { return $Text.Substring(0, $Width) }
+    return $Text.Substring(0, $Width - 3) + '...'
+}
+
+function Show-StartupAnimation {
+    if (-not (Test-AnimatedUi)) { return }
+    Write-Banner
+    $frames = @('[     ]', '[=    ]', '[==   ]', '[===  ]', '[==== ]', '[=====]')
+    foreach ($frame in $frames) {
+        Write-Host ("`r  " + $Script:C.Cyan + $frame + '  REVIT TOOLKIT / READY' + $Script:C.Reset) -NoNewline
+        Start-Sleep -Milliseconds 45
     }
-    catch { Write-Host $line }
+    Write-Host ''
 }
 
 function Write-Banner {
-    Clear-Host
-    $mode = @()
-    if ($Script:Ctx.DryRun)   { $mode += 'dry-run' }
-    if ($Script:Ctx.IsAdmin)  { $mode += 'admin' } else { $mode += 'user' }
-    $modeText = $mode -join " $($Script:G.Dot) "
-
-    Write-Host ''
-    Write-Host ("  " + $Script:C.Faint + "$Script:AppName v$Script:AppVersion  $($Script:G.Dot)  $env:COMPUTERNAME  $($Script:G.Dot)  PS $($PSVersionTable.PSVersion.ToString())  $($Script:G.Dot)  $modeText" + $Script:C.Reset)
-    Write-Host ("  " + $Script:C.Faint + "Стрелки + Enter или номер пункта  $($Script:G.Dot)  0 - назад/выход" + $Script:C.Reset)
+    if ($Script:Ctx.Vt -and (Test-InteractiveKeys)) {
+        Write-Host ("$($Script:ESC)[H$($Script:ESC)[J") -NoNewline
+    } else { Clear-Host }
+    try {
+        if ([Console]::WindowWidth -gt 20) { $Script:Ctx.Width = [Math]::Min([Console]::WindowWidth - 2, 110) }
+    } catch { }
+    $width = $Script:Ctx.Width - 4
+    $mode = if ($Script:Ctx.DryRun) { 'DRY RUN' } else { 'LIVE' }
+    $rights = if ($Script:Ctx.IsAdmin) { 'ADMIN' } else { 'USER' }
+    Write-Blank
+    Write-Host ('  ' + $Script:C.Bold + $Script:C.Cyan + (Format-UiText "R / T   REVIT TOOLKIT   v$Script:AppVersion" $width) + $Script:C.Reset)
+    Write-Host ('  ' + $Script:C.Muted + (Format-UiText "AUTODESK SYSTEM CONSOLE   /   $env:COMPUTERNAME" $width) + $Script:C.Reset)
+    $color = if ($Script:Ctx.DryRun) { $Script:C.Violet } else { $Script:C.Yellow }
+    Write-Host ('  ' + $color + "[$mode]" + $Script:C.Reset + $Script:C.Muted + "  [$rights]  PS $($PSVersionTable.PSVersion)" + $Script:C.Reset)
     Write-Rule
 }
 
@@ -323,70 +356,78 @@ function Test-InteractiveKeys {
 }
 
 function Show-Menu {
-    <#
-        Items: массив объектов @{ Key = '1'; Title = '...'; Desc = '...' }
-        Возвращает Key выбранного пункта или '0'.
-    #>
     param(
-        [Parameter(Mandatory = $true)] [array]$Items,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [array]$Items,
         [string]$Title = '',
         [string]$BackText = 'Выход'
     )
-
+    if (-not $Items.Count) { return '0' }
     $index = 0
     $useKeys = Test-InteractiveKeys
-
-    while ($true) {
-        Write-Banner
-        if ($Title) { Write-Prompt $Title; Write-Blank }
-
-        # Отрисовка
-        for ($i = 0; $i -lt $Items.Count; $i++) {
-            $item = $Items[$i]
-            $selected = ($i -eq $index -and $useKeys)
-
-            if ($selected) {
-                Write-Host ("  " + $Script:C.Accent + $Script:G.Prompt + ' ' + $item.Key + '  ' + $Script:C.Reset + $Script:C.Bold + $Script:C.Text + $item.Title + $Script:C.Reset)
-            }
-            else {
-                Write-Host ("    " + $Script:C.Muted + $item.Key + '  ' + $Script:C.Reset + $Script:C.Text + $item.Title + $Script:C.Reset)
-            }
-
-            if ($item.Desc) {
-                Write-Host ("       " + $Script:C.Faint + $item.Desc + $Script:C.Reset)
-            }
+    $firstFrame = $true
+    $animated = Test-AnimatedUi
+    $cursorVisible = $true
+    try {
+        if ($animated) {
+            $cursorVisible = [Console]::CursorVisible
+            [Console]::CursorVisible = $false
         }
-
-        Write-Host ''
-        Write-Host ("    " + $Script:C.Faint + "0  $BackText" + $Script:C.Reset)
-        Write-Host ''
-
-        if (-not $useKeys) {
-            $answer = Read-Host "  Номер"
-            $answer = $answer.Trim()
-            if ($answer -eq '0') { return '0' }
-            $hit = $Items | Where-Object { $_.Key -eq $answer } | Select-Object -First 1
-            if ($hit) { return $hit.Key }
-            continue
-        }
-
-        $key = [Console]::ReadKey($true)
-
-        switch ($key.Key) {
-            'UpArrow'   { $index--; if ($index -lt 0) { $index = $Items.Count - 1 } }
-            'DownArrow' { $index++; if ($index -ge $Items.Count) { $index = 0 } }
-            'Home'      { $index = 0 }
-            'End'       { $index = $Items.Count - 1 }
-            'Enter'     { return $Items[$index].Key }
-            'Escape'    { return '0' }
-            'Q'         { return '0' }
-            default {
-                $ch = [string]$key.KeyChar
-                if ($ch -eq '0') { return '0' }
-                $hit = $Items | Where-Object { $_.Key -eq $ch } | Select-Object -First 1
+        while ($true) {
+            Write-Banner
+            Write-Prompt $Title
+            Write-Blank
+            # Scroll a compact viewport so large submenus also fit small terminals.
+            $rows = $Items.Count
+            if ($useKeys) {
+                try { $rows = [Math]::Max(1, [Math]::Min($Items.Count, [Console]::WindowHeight - 16)) } catch { }
+            }
+            $start = [Math]::Max(0, [Math]::Min($index - [int]($rows / 2), $Items.Count - $rows))
+            for ($i = $start; $i -lt $start + $rows; $i++) {
+                $item = $Items[$i]
+                $selected = ($i -eq $index)
+                $marker = if ($selected) { [string]$Script:G.Prompt } else { ' ' }
+                $label = Format-UiText ("{0}  [{1}]  {2}" -f $marker, $item.Key, $item.Title) ($Script:Ctx.Width - 6)
+                if ($selected) {
+                    $background = if ($Script:Ctx.Vt) { "$($Script:ESC)[48;2;24;44;58m" } else { '' }
+                    Write-Host ('  ' + $background + $Script:C.Cyan + $Script:C.Bold + $label.PadRight($Script:Ctx.Width - 4) + $Script:C.Reset)
+                } else {
+                    Write-Host ('  ' + $Script:C.Muted + $label + $Script:C.Reset)
+                }
+                if ($firstFrame -and $animated) { Start-Sleep -Milliseconds 12 }
+            }
+            Write-Blank
+            Write-Rule
+            Write-Host ('  ' + $Script:C.Text + (Format-UiText $Items[$index].Desc ($Script:Ctx.Width - 4)) + $Script:C.Reset)
+            if ($rows -lt $Items.Count) { Write-Meta ("{0}/{1}  ·  остальные пункты: стрелки" -f ($index + 1), $Items.Count) }
+            Write-Blank
+            Write-Meta "0  $BackText   /   стрелки + Enter   /   клавиша пункта"
+            $firstFrame = $false
+            if (-not $useKeys) {
+                $answer = (Read-Host '  Выбор').Trim()
+                if ($answer -eq '0') { return '0' }
+                $hit = $Items | Where-Object { $_.Key -eq $answer } | Select-Object -First 1
                 if ($hit) { return $hit.Key }
+                continue
+            }
+            $key = [Console]::ReadKey($true)
+            switch ($key.Key) {
+                'UpArrow' { $index = ($index - 1 + $Items.Count) % $Items.Count }
+                'DownArrow' { $index = ($index + 1) % $Items.Count }
+                'Home' { $index = 0 }
+                'End' { $index = $Items.Count - 1 }
+                'Enter' { return $Items[$index].Key }
+                'Escape' { return '0' }
+                'Q' { return '0' }
+                default {
+                    $ch = [string]$key.KeyChar
+                    if ($ch -eq '0') { return '0' }
+                    $hit = $Items | Where-Object { $_.Key -eq $ch } | Select-Object -First 1
+                    if ($hit) { return $hit.Key }
+                }
             }
         }
+    } finally {
+        if ($animated) { try { [Console]::CursorVisible = $cursorVisible } catch { } }
     }
 }
 
@@ -2600,6 +2641,7 @@ try {
         Invoke-ModuleByKey -Key $Module
     }
     else {
+        Show-StartupAnimation
         Invoke-MainMenu
         Write-Banner
         Write-Blank
