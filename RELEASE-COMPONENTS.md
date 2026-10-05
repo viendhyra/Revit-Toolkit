@@ -22,4 +22,4 @@ Get NLM from [Autodesk's official NLM page](https://www.autodesk.com/support/tec
 4. Attach exactly the three packages listed above. Do not upload `fab-check`, diagnostics, local configuration or licenses.
 5. Publish the release, update the script and README in the repository, then remove the pending-publication status from README only after checking the three download links.
 
-The publish-components workflow downloads these exact vendor packages, checks SHA256 and Autodesk signatures, uploads all three to a draft release, then publishes it. Publication is pending verification. Manual browser upload is a fallback.
+The publish-components workflow downloads these exact vendor packages, checks SHA256 and Autodesk signatures, uploads all three to a draft release, then publishes it. Release published successfully: https://github.com/viendhyra/Revit-Toolkit/releases/tag/components-2026-10-05. All three GitHub asset digests match the pinned SHA256 values. Manual browser upload is a fallback for future releases.

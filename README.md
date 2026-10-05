@@ -160,9 +160,9 @@ FAB **1.9** автоматически предлагается скачать �
 
 Пакеты берутся из релиза `components-2026-10-05` репозитория `viendhyra/Revit-Toolkit`. Скрипт проверяет закреплённый SHA256, для Identity/NLM также действительную подпись Autodesk. Кэш — `<папка скрипта>\components`; повреждённый кэш скачивается заново. `-DryRun` ничего не скачивает и не устанавливает. Установка открывает официальный мастер; его результат проверяется.
 
-**Статус подготовки:** все три пакета получены и проверены локально; публикация релиза выполняется через GitHub Actions. До публикации загрузка из GitHub недоступна. Используйте официальный локальный установщик либо источник Autodesk.
+Все три пакета опубликованы в [GitHub Releases](https://github.com/viendhyra/Revit-Toolkit/releases/tag/components-2026-10-05). При выборе источника **3 — GitHub Releases** скрипт скачает выбранный компонент, проверит его и откроет официальный установщик.
 
-English: In Licensing repair, select **5 — Identity Manager** or **8 — Network License Manager**, then **3 — GitHub Releases**. Pinned versions: Identity **1.21.0.9** (official UCT installer), NLM **11.19.9.0**, FAB **1.9**. Missing FAB is offered for download and portable extraction. All packages require the pinned SHA256; Autodesk installers additionally require a valid Autodesk signature. Dry run performs no downloads or installation. **All three packages are prepared and verified locally; GitHub Actions publication is pending.**
+English: In Licensing repair, select **5 — Identity Manager** or **8 — Network License Manager**, then **3 — GitHub Releases**. Pinned versions: Identity **1.21.0.9** (official UCT installer), NLM **11.19.9.0**, FAB **1.9**. Missing FAB is offered for download and portable extraction. All packages require the pinned SHA256; Autodesk installers additionally require a valid Autodesk signature. Dry run performs no downloads or installation. **All three packages are published in [GitHub Releases](https://github.com/viendhyra/Revit-Toolkit/releases/tag/components-2026-10-05).** Select source 3 to download, verify and open the component installer.
 
 Подготовка публикации описана в [RELEASE-COMPONENTS.md](RELEASE-COMPONENTS.md). Проверки загрузчика без сети и установки:
 
