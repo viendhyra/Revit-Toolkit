@@ -14,7 +14,7 @@
       6. Сводка окружения (что установлено, что настроено)
 
 .PARAMETER Module
-    Запуск конкретного модуля без меню: status | iis | maxbytes | accel | clean | backups | autodesk | rsn | license
+    Запуск конкретного модуля без меню: status | iis | maxbytes | accel | clean | backups | autodesk | rsn | license | pacr
 
 .PARAMETER DryRun
     Сухой прогон: всё ищется и показывается, но ничего не удаляется и не меняется.
@@ -44,7 +44,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('', 'status', 'iis', 'maxbytes', 'accel', 'clean', 'backups', 'autodesk', 'rsn', 'license')]
+    [ValidateSet('', 'status', 'iis', 'maxbytes', 'accel', 'clean', 'backups', 'autodesk', 'rsn', 'license', 'pacr')]
     [string]$Module = '',
 
     [ValidateSet('', 'ru', 'en')]
@@ -688,6 +688,9 @@ function Get-UninstallEntry {
                     DisplayName    = $name
                     DisplayVersion = Get-NormalizedText $props.DisplayVersion
                     RegistryPath   = $_.PSPath
+                    Publisher      = Get-NormalizedText $props.Publisher
+                    UninstallString = Get-NormalizedText $props.UninstallString
+                    ProductKey     = $_.PSChildName
                 }
             }
         }
@@ -1227,6 +1230,81 @@ function Read-AcceleratorAddress {
         $address = Read-Text -Label (Get-UiText 'Адрес акселератора' 'Accelerator address') -Hint (Get-UiText 'Например: 192.168.88.21 или revit-accel.company.local' 'Example: 192.168.88.21 or revit-accel.company.local')
         if (Test-AcceleratorAddress -Address $address) { return $address }
         Write-Fail (Get-UiText 'Адрес пустой или содержит недопустимые символы.' 'Address is empty or contains invalid characters.')
+    }
+}
+
+function Get-PersonalAcceleratorProductCode {
+    param($Entry)
+    if ($Entry.DisplayName -notmatch '^(?:Autodesk\s+)?Personal Accelerator for Revit(?:\s+20\d{2})?$' -or $Entry.Publisher -notmatch '^Autodesk(?:,?\s+Inc\.?)?$') { return $null }
+    $guid = '\{[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}'
+    $pattern = '(?i)^\s*(?:msiexec(?:\.exe)?|"[^"\r\n]*\\msiexec\.exe")\s+/[ix]\s*(' + $guid + ')(?:\s+/(?:quiet|passive|norestart|q[nbrf][!+]?))*\s*$'
+    if ($Entry.UninstallString -notmatch $pattern) { return $null }
+    $code = $Matches[1].ToUpperInvariant()
+    if ($Entry.ProductKey -match ('^' + $guid + '$') -and $Entry.ProductKey -ine $code) { return $null }
+    return $code
+}
+
+function Get-PersonalAcceleratorEntry {
+    $seen = @{}
+    foreach ($entry in @(Get-UninstallEntry)) {
+        if ($entry.DisplayName -notmatch '^(?:Autodesk\s+)?Personal Accelerator for Revit(?:\s+20\d{2})?$' -or $entry.Publisher -notmatch '^Autodesk(?:,?\s+Inc\.?)?$') { continue }
+        $code = Get-PersonalAcceleratorProductCode $entry
+        $key = if ($code) { $code } else { $entry.RegistryPath }
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        [pscustomobject]@{ DisplayName=$entry.DisplayName; DisplayVersion=$entry.DisplayVersion; ProductCode=$code; RegistryPath=$entry.RegistryPath }
+    }
+}
+
+function Invoke-PersonalAcceleratorRemoval {
+    $entries = @(Get-PersonalAcceleratorEntry)
+    if (-not $entries.Count) { Write-Info (Get-UiText 'Personal Accelerator for Revit не найден.' 'Personal Accelerator for Revit was not found.'); return }
+    foreach ($entry in $entries) { Write-Info "$($entry.DisplayName) / $($entry.DisplayVersion) / $($entry.ProductCode)" }
+    if (Test-DryRun (Get-UiText 'удаление только выбранного Personal Accelerator штатным MSI; без ручной очистки файлов Revit и кэша моделей' 'remove only the selected Personal Accelerator using MSI; no manual cleanup of Revit files or model caches')) { return }
+    if (-not (Assert-Admin)) { return }
+    $selected = $entries[0]
+    if ($entries.Count -gt 1) {
+        $items = for ($i=0; $i -lt $entries.Count; $i++) { [pscustomobject]@{Key=[string]($i+1);Title=$entries[$i].DisplayName;Desc=$entries[$i].DisplayVersion} }
+        $choice = Show-Menu -Items @($items) -Title (Get-UiText 'Выберите установленный Personal Accelerator' 'Select an installed Personal Accelerator') -BackText (Get-UiText 'Отмена' 'Cancel')
+        if ($choice -eq '0') { return }
+        $index = 0
+        if (-not [int]::TryParse($choice, [ref]$index) -or $index -lt 1 -or $index -gt $entries.Count) { throw 'Invalid Personal Accelerator selection' }
+        $selected = $entries[$index-1]
+    }
+    if (-not $selected.ProductCode) { throw (Get-UiText 'Штатная MSI-команда не распознана. Используйте «Установленные приложения» Windows; принудительная очистка не выполняется.' 'The registered MSI command is not recognized. Use Windows Installed apps; no forced cleanup is performed.') }
+    if (@(Get-Process -Name Revit -ErrorAction SilentlyContinue).Count) { throw (Get-UiText 'Сохраните работу и закройте все окна Revit перед удалением.' 'Save your work and close all Revit windows before uninstalling.') }
+    Write-Warn (Get-UiText 'Компонент общий для версий Revit и используется облачными моделями. Удаляйте его только если работа с облачными моделями не нужна. Кэш моделей вручную не очищается.' 'This component is shared by Revit versions and used by cloud models. Uninstall only if cloud model workflows are not needed. Model caches are not manually cleared.')
+    if (-not (Confirm-Action -Question (Get-UiText "Удалить Personal Accelerator $($selected.DisplayVersion) штатным установщиком?" "Uninstall Personal Accelerator $($selected.DisplayVersion) using Windows Installer?") -Danger)) { return }
+    # Re-read the registered identity immediately before launching Windows Installer.
+    if (-not @(Get-PersonalAcceleratorEntry | Where-Object { $_.ProductCode -eq $selected.ProductCode }).Count) { throw 'Selected Personal Accelerator registration changed; retry discovery' }
+    $folder = Join-Path $Script:Root 'logs'
+    New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop | Out-Null
+    $log = Join-Path $folder ('PersonalAccelerator-uninstall-' + [guid]::NewGuid().ToString('N') + '.log')
+    $selected | ConvertTo-Json | Set-Content -LiteralPath ($log + '.json') -Encoding UTF8 -ErrorAction Stop
+    Write-Info $log
+    $process = Start-Process -FilePath (Join-Path $env:WINDIR 'System32\msiexec.exe') -ArgumentList @('/x', $selected.ProductCode, '/norestart', '/L*v', ('"' + $log + '"')) -Wait -PassThru -ErrorAction Stop
+    if ($process.ExitCode -eq 1602) { Write-Warn (Get-UiText 'Удаление отменено в установщике.' 'Uninstallation was cancelled in the installer.'); return }
+    if ($process.ExitCode -notin @(0,3010,1641)) { throw "Personal Accelerator uninstall failed: $($process.ExitCode). Log: $log" }
+    if ($process.ExitCode -in @(3010,1641)) { Write-Warn (Get-UiText 'Установщик сообщил о необходимости перезагрузки. После неё проверьте состояние компонента.' 'The installer reported a restart requirement. Check component status after restarting.'); return }
+    if (@(Get-PersonalAcceleratorEntry | Where-Object { $_.ProductCode -eq $selected.ProductCode }).Count) { throw (Get-UiText "Запись компонента осталась после удаления. Проверьте MSI-журнал: $log" "Component registration remains after uninstall. Check MSI log: $log") }
+    Write-Ok (Get-UiText 'Personal Accelerator удалён штатным установщиком. Revit, RSACCELERATOR и RSN.ini не изменялись скриптом.' 'Personal Accelerator was removed by Windows Installer. The script did not modify Revit, RSACCELERATOR or RSN.ini.')
+}
+
+function Invoke-ModulePersonalAccelerator {
+    while ($true) {
+        $items = @(
+            [pscustomobject]@{Key='1';Title=(Get-UiText 'Показать установленные версии' 'Show installed versions');Desc='Personal Accelerator for Revit'},
+            [pscustomobject]@{Key='2';Title=(Get-UiText 'Удалить Personal Accelerator' 'Uninstall Personal Accelerator');Desc=(Get-UiText 'Штатный MSI, проверка результата, журнал; без автоматической перезагрузки' 'Registered MSI, result verification, log; no automatic restart')}
+        )
+        $choice = Show-Menu -Items $items -Title 'Personal Accelerator for Revit' -BackText (Get-UiText 'Назад' 'Back')
+        if ($choice -eq '0') { return }
+        try {
+            switch ($choice) {
+                '1' { $entries=@(Get-PersonalAcceleratorEntry); if (-not $entries.Count) { Write-Info (Get-UiText 'Компонент не найден.' 'Component not found.') }; foreach ($entry in $entries) { Write-Info "$($entry.DisplayName) / $($entry.DisplayVersion) / $($entry.ProductCode)" } }
+                '2' { Invoke-PersonalAcceleratorRemoval }
+            }
+        } catch { Write-Fail $_.Exception.Message }
+        Wait-Menu
     }
 }
 
@@ -3239,6 +3317,7 @@ function Invoke-ModuleByKey {
         'iis'      { Invoke-ModuleIis }
         'maxbytes' { Invoke-ModuleMaxBytes }
         'accel'    { Invoke-ModuleAccelerator }
+        'pacr'     { Invoke-ModulePersonalAccelerator }
         'clean'    { Invoke-ModuleClean }
         'backups'  { Invoke-ModuleBackups }
         'autodesk' { Invoke-ModuleAutodesk }
@@ -3259,11 +3338,12 @@ function Invoke-MainMenu {
         [pscustomobject]@{ Key = '7'; Title = (Get-UiText 'Autodesk: Defender и сеть' 'Autodesk: Defender and network'); Desc = (Get-UiText 'Исключения, откат, сетевые блокировки, FAB' 'Exclusions, rollback, network blocks, FAB') },
         [pscustomobject]@{ Key = '8'; Title = (Get-UiText 'Серверы Revit / RSN.ini' 'Revit servers / RSN.ini'); Desc = (Get-UiText 'Создание, добавление, редактирование и удаление адресов' 'Create, add, edit and remove server addresses') },
         [pscustomobject]@{ Key = 'l'; Title = (Get-UiText 'Восстановление лицензирования' 'Licensing repair'); Desc = (Get-UiText 'Диагностика, резервные копии, скачивание и установка компонентов' 'Diagnostics, backups, component downloads and installation') },
+        [pscustomobject]@{ Key = 'p'; Title = 'Personal Accelerator for Revit'; Desc = (Get-UiText 'Просмотр и безопасное удаление штатным MSI' 'Inspect and safely uninstall using registered MSI') },
         [pscustomobject]@{ Key = '9'; Title = (Get-UiText 'Настройки сессии' 'session settings'); Desc = (Get-UiText 'Сухой прогон, подтверждения, логи' 'Dry run, confirmations, logs') }
     )
 
     $map = @{
-        '1' = 'status'; '2' = 'iis'; '3' = 'maxbytes'; '4' = 'accel'; '5' = 'clean'; '6' = 'backups'; '7' = 'autodesk'; '8' = 'rsn'; 'l' = 'license'
+        '1' = 'status'; '2' = 'iis'; '3' = 'maxbytes'; '4' = 'accel'; '5' = 'clean'; '6' = 'backups'; '7' = 'autodesk'; '8' = 'rsn'; 'l' = 'license'; 'p' = 'pacr'
     }
 
         $choice = Show-Menu -Items $items -Title (Get-UiText 'что делаем' 'choose an action') -BackText (Get-UiText 'Выход' 'Exit')

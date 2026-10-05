@@ -137,6 +137,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\RevitToolkit.ps1 -Modu
 
 ## Параметры
 
+### Удаление Personal Accelerator for Revit / Uninstall Personal Accelerator
+
+Главное меню **p — Personal Accelerator for Revit → 2 — Удалить**. Пункт **1** показывает установленные версии. Прямой запуск: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\RevitToolkit.ps1 -Module pacr`; добавьте `-DryRun` для проверки плана без изменений.
+
+Модуль выбирает только записи Personal Accelerator с издателем Autodesk. Дубли одного MSI объединяются. Удаление выполняется через системный `msiexec /x` по проверенному коду продукта, с подтверждением, MSI-журналом и без автоматической перезагрузки. Запущенный Revit блокирует операцию: сначала сохраните работу и закройте его. Нераспознанный деинсталлятор, ошибка MSI или оставшаяся запись не выдаются за успешное удаление. При запросе перезагрузки повторно проверьте состояние после неё. Журнал и сведения о выбранной записи сохраняются в `logs`; это диагностика, а не резервная копия программы.
+
+Personal Accelerator — общий компонент разных версий Revit, используемый для облачных моделей. Autodesk рекомендует удалять его, только если облачные модели не используются: [официальная инструкция](https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/Seat-Usage-reporting-Unexpected-product-activity-for-Cloud-Models-for-Revit.html). Скрипт не очищает вручную кэш моделей, файлы Revit, RSN.ini и переменные RSACCELERATOR. Удаление файлов самого компонента выполняет штатный MSI.
+
+English: **p — Personal Accelerator for Revit → 2 — Uninstall**, or `-Module pacr`. Registered Autodesk MSI products only; duplicate registrations are collapsed. Requires closed Revit, confirmation and administrator rights. Uses Windows Installer with logs and no automatic restart; verifies the result. No manual deletion of Revit files or model caches. This shared component serves cloud models; uninstall only if that workflow is not needed.
+
+Offline check: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test-PersonalAccelerator.ps1`.
+
 ### Антивирусы / Antivirus
 
 Меню **7 — Autodesk: Defender и сеть → v — Антивирусы**:
