@@ -4,7 +4,7 @@
 Объединяет утилиты обслуживания, настройки Defender и сетевые правила Autodesk в один файл с общим UI, логом и режимом сухого прогона.
 
 ```
-  Revit Toolkit v1.2.0 · SRV-BIM01 · PS 5.1.19041.4648 · admin
+  Revit Toolkit v1.3.0 · SRV-BIM01 · PS 5.1.19041.4648 · admin
   Стрелки + Enter или номер пункта · 0 — назад/выход
   ──────────────────────────────────────────────────────────────
 
@@ -136,6 +136,23 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\RevitToolkit.ps1 -Modu
 Проверка без изменения настроек Windows: `powershell.exe -NoProfile -File .\Test-Autodesk.ps1`.
 
 ## Параметры
+
+### Steel Connections: мигание терминала / Terminal flashing
+
+Версия **1.3.0**: главное меню **s — Steel Connections / LocalDB**, затем версия Revit (по умолчанию 2022). Отдельный запуск: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\RevitToolkit.ps1 -Module steel`. Поддерживается `-DryRun`.
+
+1. Диагностика показывает манифесты DB/UI, SQL `error.log` текущего пользователя, сведения LocalDB и `fsutil` для диска с `%LOCALAPPDATA%`.
+2. NVMe-исправление применяется только если максимальный физический сектор больше 4096 байт. Это [Microsoft workaround](https://learn.microsoft.com/en-us/troubleshoot/sql/database-engine/database-file-operations/troubleshoot-os-4kb-disk-sector-size): `ForcedPhysicalSectorSizeInBytes` типа `REG_MULTI_SZ` со значением `* 4095`. Он меняет системную настройку драйвера `stornvme`, а не только Revit. Обязательна ручная перезагрузка. Если вывод `fsutil` не распознан, запись блокируется.
+3. Откат восстанавливает точное прежнее значение из `%ProgramData%\RevitToolkit\SteelConnections\nvme-sector-backup.json`; изначально отсутствовавшее значение удаляется. Если настройка была изменена извне, автоматический откат останавливается.
+4. Отключение переименовывает только `Autodesk.SteelConnectionsDB.addin` и `Autodesk.SteelConnectionsUI.addin` в `.addin.revittoolkit-disabled`. Проверяются стандартные папки выбранной версии в Program Files, ProgramData и AppData. Все окна Revit должны быть закрыты. DLL, модели и базы не удаляются; инструменты стальных соединений становятся недоступны.
+5. Включение восстанавливает только манифесты с суффиксом этого модуля. При конфликте файлов перезапись запрещена; частично выполненное переименование откатывается.
+6. Запуск существующего `SteelConnections<год>` выполняется под текущей учётной записью после подтверждения. Базы не удаляются и не пересоздаются. После NVMe-исправления сначала перезагрузите Windows.
+
+Причина из документа пользователя: Revit 2022, LocalDB 12.0, SQL `misaligned log IOs` и физический сектор NVMe 65536 байт. Само мигание терминала ещё не доказывает эту причину; используйте диагностику. Нестандартный путь установки и базы LocalDB другого пользователя автоматически не обнаруживаются. Переустановка Revit может восстановить манифесты надстройки.
+
+English: **s — Steel Connections / LocalDB**, version default 2022. Diagnose manifests, current-user SQL logs and physical disk sectors. Apply the Microsoft NVMe workaround only for sectors larger than 4096 bytes; back up the exact original registry value and restart Windows manually. Restore stops if the value changed externally. Disable/enable by renaming only the known DB/UI manifests, with Revit closed. Databases, DLLs and models are not deleted or recreated. Standard installation folders only; LocalDB belongs to the current user.
+
+Offline check: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test-SteelConnections.ps1`.
 
 ### Удаление Personal Accelerator for Revit / Uninstall Personal Accelerator
 

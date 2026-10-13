@@ -14,7 +14,7 @@
       6. Сводка окружения (что установлено, что настроено)
 
 .PARAMETER Module
-    Запуск конкретного модуля без меню: status | iis | maxbytes | accel | clean | backups | autodesk | rsn | license | pacr
+    Запуск конкретного модуля без меню: status | iis | maxbytes | accel | clean | backups | autodesk | rsn | license | pacr | steel
 
 .PARAMETER DryRun
     Сухой прогон: всё ищется и показывается, но ничего не удаляется и не меняется.
@@ -44,7 +44,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('', 'status', 'iis', 'maxbytes', 'accel', 'clean', 'backups', 'autodesk', 'rsn', 'license', 'pacr')]
+    [ValidateSet('', 'status', 'iis', 'maxbytes', 'accel', 'clean', 'backups', 'autodesk', 'rsn', 'license', 'pacr', 'steel')]
     [string]$Module = '',
 
     [ValidateSet('', 'ru', 'en')]
@@ -64,7 +64,7 @@ $ErrorActionPreference = 'Stop'
 # ============================================================================
 
 $Script:AppName    = 'Revit Toolkit'
-$Script:AppVersion = '1.2.0'
+$Script:AppVersion = '1.3.0'
 $Script:Root       = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $Script:UiLanguage = 'ru'
 $Script:LanguageFile = Join-Path $env:LOCALAPPDATA 'RevitToolkit\language.txt'
@@ -1352,6 +1352,159 @@ function Invoke-ModulePersonalAccelerator {
                 '2' { Invoke-PersonalAcceleratorRemoval }
                 '3' { Show-PersonalAcceleratorRecovery }
                 '4' { Start-PersonalAcceleratorTroubleshooter }
+            }
+        } catch { Write-Fail $_.Exception.Message }
+        Wait-Menu
+    }
+}
+
+function Get-SteelManifestPaths {
+    param([ValidateRange(2017,2099)][int]$Version)
+    $folders=@((Join-Path $env:ProgramFiles "Autodesk\Revit $Version\AddIns\SteelConnections"), (Join-Path $env:ProgramData "Autodesk\Revit\Addins\$Version"), (Join-Path $env:APPDATA "Autodesk\Revit\Addins\$Version"))
+    foreach ($folder in $folders) {
+        foreach ($name in @('Autodesk.SteelConnectionsDB.addin','Autodesk.SteelConnectionsUI.addin')) {
+            $path=Join-Path $folder $name
+            if ((Test-Path -LiteralPath $path -PathType Leaf) -or (Test-Path -LiteralPath ($path+'.revittoolkit-disabled') -PathType Leaf)) { $path }
+        }
+    }
+}
+
+function Set-SteelConnectionsEnabled {
+    param([ValidateRange(2017,2099)][int]$Version, [bool]$Enabled)
+    $paths=@(Get-SteelManifestPaths $Version)
+    if (-not $paths.Count) { Write-Warn (Get-UiText 'Манифесты Steel Connections не найдены в стандартных папках выбранной версии.' 'Steel Connections manifests were not found in the standard folders of the selected version.'); return }
+    $moves=@()
+    foreach ($path in $paths) {
+        $disabled=$path+'.revittoolkit-disabled'
+        if ((Test-Path -LiteralPath $path) -and (Test-Path -LiteralPath $disabled)) { throw "Both active and disabled manifests exist: $path" }
+        $source=if ($Enabled) { $disabled } else { $path }
+        $destination=if ($Enabled) { $path } else { $disabled }
+        if (Test-Path -LiteralPath $source -PathType Leaf) { $moves += [pscustomobject]@{Source=$source;Destination=$destination}; Write-Info "$source => $destination" }
+    }
+    if (-not $moves.Count) { Write-Info (Get-UiText 'Выбранное состояние уже установлено.' 'The requested state is already set.'); return }
+    if (Test-DryRun (Get-UiText "Steel Connections ${Version}: включить = $Enabled; переименование манифестов" "Steel Connections ${Version}: enable = $Enabled; rename manifests")) { return }
+    if (-not (Assert-Admin)) { return }
+    if (@(Get-Process -Name Revit -ErrorAction SilentlyContinue).Count) { throw (Get-UiText 'Закройте все окна Revit перед изменением надстройки.' 'Close all Revit windows before changing the add-in.') }
+    Write-Warn (Get-UiText 'При отключении инструменты стальных соединений будут недоступны. Файлы DLL, модели и базы LocalDB не удаляются.' 'Disabling makes steel connection tools unavailable. DLLs, models and LocalDB databases are not deleted.')
+    if (-not (Confirm-Action -Question (Get-UiText "Изменить загрузку Steel Connections для Revit $Version?" "Change Steel Connections loading for Revit $Version?"))) { return }
+    $done=@()
+    try { foreach ($move in $moves) { Move-Item -LiteralPath $move.Source -Destination $move.Destination -ErrorAction Stop; $done += $move } }
+    catch {
+        $failure=$_
+        for ($i=$done.Count-1; $i -ge 0; $i--) { try { Move-Item -LiteralPath $done[$i].Destination -Destination $done[$i].Source -ErrorAction Stop } catch { Write-Warn "Manifest rollback failed: $($done[$i].Destination)" } }
+        throw $failure
+    }
+    Write-Ok (Get-UiText 'Состояние изменено. Запустите Revit заново.' 'State changed. Start Revit again.')
+}
+
+function ConvertFrom-SectorInfo {
+    param([string]$Text)
+    $values=@()
+    foreach ($name in @('PhysicalBytesPerSectorForAtomicity','PhysicalBytesPerSectorForPerformance')) {
+        $match=[regex]::Match($Text, '(?m)^\s*'+$name+'\s*:\s*(\d+)\s*$')
+        if (-not $match.Success) { throw 'Could not parse fsutil physical sector information; no registry changes are allowed' }
+        $values += [long]$match.Groups[1].Value
+    }
+    return ($values | Measure-Object -Maximum).Maximum
+}
+
+function Get-SteelSectorInfo {
+    $volume=[IO.Path]::GetPathRoot($env:LOCALAPPDATA).TrimEnd('\')
+    if ($volume -notmatch '^[A-Za-z]:$') { throw 'Expected a local drive for the current user LocalDB data' }
+    $text=(& (Join-Path $env:WINDIR 'System32\fsutil.exe') fsinfo sectorinfo $volume 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) { throw "fsutil failed for $volume. Run diagnostics as administrator. $text" }
+    return [pscustomobject]@{Volume=$volume;Bytes=(ConvertFrom-SectorInfo $text);Text=$text}
+}
+
+function Get-NvmeSectorSetting {
+    $path='HKLM:\SYSTEM\CurrentControlSet\Services\stornvme\Parameters\Device'
+    $name='ForcedPhysicalSectorSizeInBytes'
+    $exists=$false; $kind=''; $value=@()
+    if (Test-Path -LiteralPath $path) {
+        $key=Get-Item -LiteralPath $path -ErrorAction Stop
+        try { $exists=$key.GetValueNames() -contains $name; if ($exists) { $kind=[string]$key.GetValueKind($name); $value=@($key.GetValue($name)) } } finally { $key.Close() }
+    }
+    return [pscustomobject]@{Version=1;PropertyExists=$exists;Kind=$kind;Value=$value}
+}
+
+function Set-SteelNvmeWorkaround {
+    param([switch]$Restore)
+    $path='HKLM:\SYSTEM\CurrentControlSet\Services\stornvme\Parameters\Device'; $name='ForcedPhysicalSectorSizeInBytes'
+    $backup=Join-Path $env:ProgramData 'RevitToolkit\SteelConnections\nvme-sector-backup.json'
+    if (Test-DryRun (Get-UiText "NVMe: исправление/откат; откат = $Restore; резервная копия $backup" "NVMe workaround/restore; restore = $Restore; backup $backup")) { return }
+    if (-not (Assert-Admin)) { return }
+    $current=Get-NvmeSectorSetting
+    if ($current.PropertyExists -and $current.Kind -ne 'MultiString') { throw 'Unexpected NVMe registry value type; refusing to overwrite it' }
+    $isApplied=$current.PropertyExists -and @($current.Value).Count -eq 1 -and $current.Value[0] -eq '* 4095'
+    if ($Restore) {
+        if (-not (Test-Path -LiteralPath $backup -PathType Leaf)) { throw 'Toolkit NVMe backup not found; no changes made' }
+        $original=Get-Content -LiteralPath $backup -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($original.Version -ne 1 -or $original.PropertyExists -isnot [bool] -or ($original.PropertyExists -and ($original.Kind -ne 'MultiString' -or @($original.Value | Where-Object { $_ -isnot [string] }).Count))) { throw 'Invalid NVMe backup' }
+        if (-not $isApplied) { throw 'NVMe value has changed since the toolkit workaround; automatic restore stopped' }
+    } else {
+        if ($isApplied) { Write-Info (Get-UiText 'Параметр уже установлен. После изменения требуется перезагрузка.' 'The value is already set. A restart is required after a change.'); return }
+        $sector=Get-SteelSectorInfo; Write-Info $sector.Text
+        if ($sector.Bytes -le 4096) { throw (Get-UiText 'Сектор не больше 4096 байт: этот workaround не требуется и не будет применён.' 'The sector is no larger than 4096 bytes: this workaround is not needed and will not be applied.') }
+        if (-not (Test-Path -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\stornvme')) { throw 'Microsoft stornvme driver registration not found' }
+        if (Test-Path -LiteralPath $backup) { throw 'An earlier NVMe backup exists; resolve or restore the earlier change before applying again' }
+    }
+    Write-Warn (Get-UiText 'Изменяется системная настройка stornvme для NVMe, не только Revit. Обязательна перезагрузка Windows; автоматической перезагрузки нет.' 'This changes the system stornvme NVMe setting, not only Revit. Windows must be restarted; there is no automatic restart.')
+    if (-not (Confirm-Action -Question (Get-UiText "Изменить ForcedPhysicalSectorSizeInBytes? Откат = $Restore" "Change ForcedPhysicalSectorSizeInBytes? Restore = $Restore") -Danger)) { return }
+    if ($Restore) {
+        if ($original.PropertyExists) { New-ItemProperty -Path $path -Name $name -PropertyType MultiString -Value ([string[]]@($original.Value)) -Force -ErrorAction Stop | Out-Null }
+        else { Remove-ItemProperty -LiteralPath $path -Name $name -ErrorAction Stop }
+        $after=Get-NvmeSectorSetting
+        if ($after.PropertyExists -ne $original.PropertyExists -or ($original.PropertyExists -and (($after.Value -join "`n") -cne (@($original.Value) -join "`n")))) { throw 'NVMe restore verification failed; backup preserved' }
+        Move-Item -LiteralPath $backup -Destination ($backup+'.restored-'+[guid]::NewGuid().ToString('N')) -ErrorAction Stop
+    } else {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $backup) -Force -ErrorAction Stop | Out-Null
+        $current | ConvertTo-Json | Set-Content -LiteralPath $backup -Encoding UTF8 -ErrorAction Stop
+        if (-not (Test-Path -LiteralPath $path)) { New-Item -Path $path -ErrorAction Stop | Out-Null }
+        New-ItemProperty -Path $path -Name $name -PropertyType MultiString -Value ([string[]]@('* 4095')) -Force -ErrorAction Stop | Out-Null
+        $after=Get-NvmeSectorSetting
+        if ($after.Kind -ne 'MultiString' -or @($after.Value).Count -ne 1 -or $after.Value[0] -ne '* 4095') { throw 'NVMe write verification failed; backup preserved' }
+    }
+    Write-Ok (Get-UiText 'Настройка сохранена и проверена. Перезагрузите Windows, затем повторите диагностику.' 'Setting saved and verified. Restart Windows, then repeat diagnostics.')
+}
+
+function Invoke-ModuleSteelConnections {
+    $raw=Read-Text -Label (Get-UiText 'Версия Revit (Enter — 2022)' 'Revit version (Enter for 2022)')
+    if (-not $raw) { $raw='2022' }
+    $version=0
+    if (-not [int]::TryParse($raw,[ref]$version) -or $version -lt 2017 -or $version -gt 2099) { throw 'Invalid Revit version' }
+    while ($true) {
+        $items=@(
+            [pscustomobject]@{Key='1';Title=(Get-UiText 'Диагностика Steel Connections / LocalDB' 'Steel Connections / LocalDB diagnostics');Desc=(Get-UiText 'Манифесты, SQL error.log текущего пользователя, сектор диска' 'Manifests, current user SQL error.log, disk sector')},
+            [pscustomobject]@{Key='2';Title=(Get-UiText 'Исправить NVMe-сектор больше 4 КБ' 'Fix NVMe sectors larger than 4 KB');Desc=(Get-UiText 'Microsoft workaround, резервная копия, требуется перезагрузка' 'Microsoft workaround, backup, restart required')},
+            [pscustomobject]@{Key='3';Title=(Get-UiText 'Откатить NVMe-исправление' 'Restore previous NVMe setting');Desc=(Get-UiText 'Точное предыдущее значение из резервной копии' 'Exact previous value from backup')},
+            [pscustomobject]@{Key='4';Title=(Get-UiText 'Отключить Steel Connections' 'Disable Steel Connections');Desc=(Get-UiText 'Переименовать DB/UI .addin; базы и DLL сохраняются' 'Rename DB/UI .addin; preserve databases and DLLs')},
+            [pscustomobject]@{Key='5';Title=(Get-UiText 'Включить Steel Connections обратно' 'Enable Steel Connections again');Desc=(Get-UiText 'Восстановить манифесты, отключённые этим модулем' 'Restore manifests disabled by this module')},
+            [pscustomobject]@{Key='6';Title=(Get-UiText 'Запустить существующий LocalDB' 'Start the existing LocalDB instance');Desc="SteelConnections$version"}
+        )
+        $choice=Show-Menu -Items $items -Title "Steel Connections / Revit $version" -BackText (Get-UiText 'Назад' 'Back')
+        if ($choice -eq '0') { return }
+        try {
+            switch ($choice) {
+                '1' {
+                    foreach ($path in @(Get-SteelManifestPaths $version)) { Write-Info "$path / enabled=$(Test-Path -LiteralPath $path)" }
+                    try { $sector=Get-SteelSectorInfo; Write-Info $sector.Text } catch { Write-Warn $_.Exception.Message }
+                    $log=Join-Path $env:LOCALAPPDATA "Microsoft\Microsoft SQL Server Local DB\Instances\SteelConnections$version\error.log"
+                    Write-Info $log
+                    if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 35 | ForEach-Object { Write-Info $_ } }
+                    if (Get-Command SqlLocalDB.exe -ErrorAction SilentlyContinue) { & SqlLocalDB.exe versions | Out-Host; & SqlLocalDB.exe info "SteelConnections$version" | Out-Host }
+                    else { Write-Warn (Get-UiText 'SqlLocalDB.exe не найден в PATH. Базы не изменялись.' 'SqlLocalDB.exe not found in PATH. Databases were not modified.') }
+                }
+                '2' { Set-SteelNvmeWorkaround }
+                '3' { Set-SteelNvmeWorkaround -Restore }
+                '4' { Set-SteelConnectionsEnabled -Version $version -Enabled $false }
+                '5' { Set-SteelConnectionsEnabled -Version $version -Enabled $true }
+                '6' {
+                    if (-not (Test-DryRun "SqlLocalDB start SteelConnections$version")) {
+                        Write-Info (Get-UiText 'LocalDB принадлежит текущей учётной записи. Запускайте под пользователем Revit; базы не пересоздаются.' 'LocalDB belongs to the current account. Run as the Revit user; databases are not recreated.')
+                        if (-not (Get-Command SqlLocalDB.exe -ErrorAction SilentlyContinue)) { throw 'SqlLocalDB.exe not found in PATH' }
+                        if (Confirm-Action -Question "Start SteelConnections$version?") { & SqlLocalDB.exe start "SteelConnections$version" | Out-Host; if ($LASTEXITCODE -ne 0) { throw 'LocalDB failed to start; check SQL error.log' } }
+                    }
+                }
             }
         } catch { Write-Fail $_.Exception.Message }
         Wait-Menu
@@ -3368,6 +3521,7 @@ function Invoke-ModuleByKey {
         'maxbytes' { Invoke-ModuleMaxBytes }
         'accel'    { Invoke-ModuleAccelerator }
         'pacr'     { Invoke-ModulePersonalAccelerator }
+        'steel'    { Invoke-ModuleSteelConnections }
         'clean'    { Invoke-ModuleClean }
         'backups'  { Invoke-ModuleBackups }
         'autodesk' { Invoke-ModuleAutodesk }
@@ -3389,11 +3543,12 @@ function Invoke-MainMenu {
         [pscustomobject]@{ Key = '8'; Title = (Get-UiText 'Серверы Revit / RSN.ini' 'Revit servers / RSN.ini'); Desc = (Get-UiText 'Создание, добавление, редактирование и удаление адресов' 'Create, add, edit and remove server addresses') },
         [pscustomobject]@{ Key = 'l'; Title = (Get-UiText 'Восстановление лицензирования' 'Licensing repair'); Desc = (Get-UiText 'Диагностика, резервные копии, скачивание и установка компонентов' 'Diagnostics, backups, component downloads and installation') },
         [pscustomobject]@{ Key = 'p'; Title = 'Personal Accelerator for Revit'; Desc = (Get-UiText 'Просмотр и безопасное удаление штатным MSI' 'Inspect and safely uninstall using registered MSI') },
+        [pscustomobject]@{ Key = 's'; Title = 'Steel Connections / LocalDB'; Desc = (Get-UiText 'Мигание терминала: диагностика NVMe, исправление, отключение надстройки' 'Terminal flashing: NVMe diagnostics, workaround, disable add-in') },
         [pscustomobject]@{ Key = '9'; Title = (Get-UiText 'Настройки сессии' 'session settings'); Desc = (Get-UiText 'Сухой прогон, подтверждения, логи' 'Dry run, confirmations, logs') }
     )
 
     $map = @{
-        '1' = 'status'; '2' = 'iis'; '3' = 'maxbytes'; '4' = 'accel'; '5' = 'clean'; '6' = 'backups'; '7' = 'autodesk'; '8' = 'rsn'; 'l' = 'license'; 'p' = 'pacr'
+        '1' = 'status'; '2' = 'iis'; '3' = 'maxbytes'; '4' = 'accel'; '5' = 'clean'; '6' = 'backups'; '7' = 'autodesk'; '8' = 'rsn'; 'l' = 'license'; 'p' = 'pacr'; 's' = 'steel'
     }
 
         $choice = Show-Menu -Items $items -Title (Get-UiText 'что делаем' 'choose an action') -BackText (Get-UiText 'Выход' 'Exit')
