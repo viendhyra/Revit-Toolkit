@@ -6,7 +6,7 @@ foreach ($name in @('Get-UiText','Get-ToolkitComponentAsset','Assert-AutodeskIns
     . ([scriptblock]::Create($f.Extent.Text))
 }
 $missing = @()
-foreach ($component in @('Identity','NLM','FAB')) {
+foreach ($component in @('Licensing','Identity','NLM','FAB')) {
     $asset = Get-ToolkitComponentAsset $component
     $path = Join-Path $PSScriptRoot ('release-assets\' + $asset.Name)
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $missing += $asset.Name; continue }

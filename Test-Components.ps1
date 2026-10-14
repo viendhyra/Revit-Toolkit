@@ -7,7 +7,7 @@ foreach ($name in @('Get-ToolkitComponentAsset','Get-ToolkitComponentPackage')) 
     $f = $ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name}, $true)
     . ([scriptblock]::Create($f.Extent.Text))
 }
-foreach ($component in @('Identity','NLM','FAB')) {
+foreach ($component in @('Licensing','Identity','NLM','FAB')) {
     $asset = Get-ToolkitComponentAsset $component
     if ($asset.Sha256 -notmatch '^[a-f0-9]{64}$' -or $asset.Url -ne ('https://github.com/viendhyra/Revit-Toolkit/releases/download/components-2026-10-05/' + $asset.Name)) { throw 'Invalid pinned asset' }
 }

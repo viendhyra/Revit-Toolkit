@@ -1,7 +1,7 @@
 # Offline checks: no installation, registry, services or environment are changed.
 $ErrorActionPreference = 'Stop'
 $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'RevitToolkit.ps1'), [ref]$null, [ref]$null)
-foreach ($name in @('Get-UiText', 'Get-LicenseLocalhostCleanup', 'Test-AutodeskDownloadUri', 'Get-AutodeskComponentLinks', 'Assert-AutodeskInstaller', 'Invoke-LicenseLocalCleanup', 'Invoke-LicenseLoginReset', 'Invoke-AutodeskComponentInstall')) {
+foreach ($name in @('Get-UiText', 'Get-LicenseLocalhostCleanup', 'Test-AutodeskDownloadUri', 'Get-AutodeskComponentLinks', 'Assert-AutodeskInstaller', 'Invoke-LicenseLocalCleanup', 'Invoke-LicenseLoginReset', 'Get-AutodeskComponentInstaller', 'Invoke-AutodeskComponentInstall')) {
     $f=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
     . ([scriptblock]::Create($f.Extent.Text))
 }
@@ -33,6 +33,11 @@ $Script:Signer='O=Autodesk, Inc., C=US'; $Script:SignatureStatus='NotSigned'
 $rejected=$false
 try { Assert-AutodeskInstaller 'dummy.exe' } catch { $rejected=$true }
 if (-not $rejected) { throw 'Unsigned installer accepted' }
+function Get-ToolkitComponentPackage { param($Component) return ('GitHub-' + $Component) }
+function Read-Text { throw 'Unexpected source prompt' }
+foreach ($component in @('Licensing','Identity','NLM')) {
+    if ((Get-AutodeskComponentInstaller $component) -ne ('GitHub-' + $component)) { throw 'Default source is not GitHub' }
+}
 function Write-Warn {}
 function Test-DryRun { return $true }
 function Assert-Admin { throw 'Unexpected admin check after dry-run guard' }

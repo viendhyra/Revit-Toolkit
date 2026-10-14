@@ -2949,6 +2949,7 @@ function Invoke-AntivirusMenu {
         [pscustomobject]@{ Key='n'; Title=(Get-UiText 'Network License Manager: блокировать сеть' 'Network License Manager: block network'); Desc=(Get-UiText 'Только EXE этой папки; исходящий трафик, все профили' 'Only EXEs in this folder; outbound traffic, all profiles') },
         [pscustomobject]@{ Key='u'; Title=(Get-UiText 'Network License Manager: удалить блокировку' 'Network License Manager: remove block'); Desc=(Get-UiText 'Только правила этого модуля; Revit не изменяется' 'Only this module''s rules; Revit is unchanged') },
         [pscustomobject]@{ Key='f'; Title=(Get-UiText 'Открыть Firewall App Blocker' 'Open Firewall App Blocker'); Desc=(Get-UiText 'Необязательно: папка Fab* рядом со скриптом' 'Optional: Fab* folder next to the script') },
+        [pscustomobject]@{ Key='h'; Title=(Get-UiText 'Заменить hosts из GitHub' 'Replace hosts from GitHub'); Desc=(Get-UiText 'Резервная копия; блокировки Autodesk и Adobe' 'Backup; Autodesk and Adobe blocks') },
         [pscustomobject]@{ Key='v'; Title=(Get-UiText 'Антивирусы и управление защитой' 'Antivirus and protection controls'); Desc=(Get-UiText 'Состояние, временное отключение Defender, сторонние исключения' 'Status, temporary Defender disable, third-party exclusions') }
     )
     while ($true) {
@@ -2969,6 +2970,7 @@ function Invoke-AntivirusMenu {
                 'n' { Set-NlmInternet $true }
                 'u' { Set-NlmInternet $false }
                 'f' { Start-Fab }
+                'h' { Invoke-ToolkitHostsUpdate }
                 'v' { Invoke-AntivirusMenu }
             }
         } catch { Write-AutodeskLog $_.Exception.Message ERROR }
@@ -3181,6 +3183,33 @@ function Invoke-ModuleRsn {
     }
 }
 
+function Invoke-ToolkitHostsUpdate {
+    $target = Join-Path $env:WINDIR 'System32\drivers\etc\hosts'
+    if (Test-DryRun (Get-UiText "скачивание hosts из GitHub, резервная копия и замена $target" "download hosts from GitHub, back up and replace $target")) { return }
+    if (-not (Assert-Admin)) { return }
+    if (-not (Confirm-Action -Question (Get-UiText 'Заменить весь hosts файлом из GitHub? Текущие записи будут сохранены в резервной копии. Файл блокирует сайты Autodesk и Adobe и может мешать входу и лицензированию.' 'Replace the entire hosts file from GitHub? Current entries will be backed up. The file blocks Autodesk and Adobe sites and may disrupt sign-in and licensing.') -Danger)) { return }
+    $folder = Join-Path $Script:Root ('components\hosts\' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop | Out-Null
+    $download = Join-Path $folder 'hosts'
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/viendhyra/Revit-Toolkit/main/hosts' -UseBasicParsing -OutFile $download -TimeoutSec 60 -ErrorAction Stop | Out-Null
+        if ((Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash -ine '04e7be8f84588cdb5d7e16815660093f6f474bad4898ac5af85fd29a9d3754c3') { throw 'Hosts SHA256 mismatch' }
+        $backupFolder = Join-Path $env:ProgramData 'RevitToolkit\HostsBackups'
+        New-Item -ItemType Directory -Path $backupFolder -Force -ErrorAction Stop | Out-Null
+        $backup = Join-Path $backupFolder ('hosts-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N') + '.bak')
+        if (Test-Path -LiteralPath $target -PathType Leaf) {
+            Copy-Item -LiteralPath $target -Destination $backup -ErrorAction Stop
+            Write-Info (Get-UiText "Резервная копия: $backup" "Backup: $backup")
+        }
+        Copy-Item -LiteralPath $download -Destination $target -Force -ErrorAction Stop
+        Clear-DnsClientCache -ErrorAction Stop
+        Write-Ok (Get-UiText "hosts заменён: $target" "hosts replaced: $target")
+    } finally {
+        if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Force -ErrorAction Stop }
+    }
+}
+
 function Get-LicenseLocalhostCleanup {
     param([string]$Value)
     $parts = @($Value -split '[;,]' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -3310,8 +3339,9 @@ function Test-AutodeskDownloadUri {
 }
 
 function Get-ToolkitComponentAsset {
-    param([ValidateSet('Identity', 'NLM', 'FAB')][string]$Component)
+    param([ValidateSet('Licensing', 'Identity', 'NLM', 'FAB')][string]$Component)
     $assets = @{
+        Licensing = @{ Name='AdskLicensing-17.0.0.16519-installer.exe'; Sha256='c5c23cdb3014ac4ee54c7819b2cbd5897ff09d41647b84587d735bcdfb095ade'; Version='17.0.0.16519' }
         Identity = @{ Name='AdskIdentityManager-1.21.0.9-UCT-Installer.exe'; Sha256='c0209ba50ca088849a6cbae5e9da33486d86b1bc6b14d228786c689ce5bdc6bd'; Version='1.21.0.9' }
         NLM = @{ Name='nlm11.19.9.0_ipv4_ipv6_win64.msi'; Sha256='fc54f6e88f569c5c32df7e65a58a04307d39c2852465fa91cc4ce16a3ad43af7'; Version='11.19.9.0' }
         FAB = @{ Name='fab.zip'; Sha256='278baecab6ce9d729425e5cd0aec0294f2ce5803342afc8328e4c7ae69a8dbfd'; Version='1.9' }
@@ -3321,7 +3351,7 @@ function Get-ToolkitComponentAsset {
 }
 
 function Get-ToolkitComponentPackage {
-    param([ValidateSet('Identity', 'NLM', 'FAB')][string]$Component)
+    param([ValidateSet('Licensing', 'Identity', 'NLM', 'FAB')][string]$Component)
     if (Test-DryRun (Get-UiText "скачивание $Component из GitHub Releases и проверка SHA256" "download $Component from GitHub Releases and verify SHA256")) { return $null }
     $asset = Get-ToolkitComponentAsset $Component
     Write-Info "$Component $($asset.Version)"
@@ -3373,11 +3403,15 @@ function Assert-AutodeskInstaller {
 
 function Get-AutodeskComponentInstaller {
     param([ValidateSet('Licensing', 'Identity', 'NLM')][string]$Component)
+    return Get-ToolkitComponentPackage $Component
+}
+
+function Get-AutodeskAlternativeInstaller {
+    param([ValidateSet('Licensing', 'Identity', 'NLM')][string]$Component)
     $page = Get-AutodeskComponentPage $Component
     Write-Info $page
     $choice = Read-Text -Label (Get-UiText 'Источник: 1 — Autodesk, 2 — локальный EXE/MSI, 3 — GitHub Releases, Enter — отмена' 'Source: 1 — Autodesk, 2 — local EXE/MSI, 3 — GitHub Releases, Enter to cancel')
     if ($choice -eq '3') {
-        if ($Component -eq 'Licensing') { throw (Get-UiText 'Licensing Service не включён в этот релиз. Выберите Autodesk или локальный EXE.' 'Licensing Service is not included in this release. Select Autodesk or local EXE.') }
         return Get-ToolkitComponentPackage $Component
     }
     if ($choice -eq '2') {
@@ -3424,10 +3458,10 @@ function Get-AutodeskComponentInstaller {
 }
 
 function Invoke-AutodeskComponentInstall {
-    param([ValidateSet('Licensing', 'Identity', 'NLM')][string]$Component, [switch]$Reinstall)
+    param([ValidateSet('Licensing', 'Identity', 'NLM')][string]$Component, [switch]$Reinstall, [switch]$AlternativeSource)
     if (Test-DryRun (Get-UiText "скачивание/выбор, проверка подписи и установка $Component; переустановка = $Reinstall" "download/select, verify signature and install $Component; reinstall = $Reinstall")) { return }
     if (-not (Assert-Admin)) { return }
-    $installer = Get-AutodeskComponentInstaller $Component
+    $installer = if ($AlternativeSource) { Get-AutodeskAlternativeInstaller $Component } else { Get-AutodeskComponentInstaller $Component }
     if (-not $installer) { return }
     if (-not (Confirm-Action -Question (Get-UiText "Установить $Component? Закройте Autodesk-приложения; будет открыт официальный установщик." "Install $Component? Close Autodesk applications; the official installer will open."))) { return }
     Assert-AutodeskInstaller $installer
@@ -3453,11 +3487,12 @@ function Invoke-ModuleLicense {
             [pscustomobject]@{ Key='1'; Title=(Get-UiText 'Диагностика лицензирования' 'Licensing diagnostics'); Desc=(Get-UiText 'Службы, FLEX-переменные, подписи и хэши version.dll' 'Services, FLEX variables, version.dll signatures and hashes') },
             [pscustomobject]@{ Key='2'; Title=(Get-UiText 'Очистить AdskNLM / localhost' 'Clean up AdskNLM / localhost'); Desc=(Get-UiText 'С резервной копией; другие адреса лицензий сохраняются' 'With backup; other license addresses are preserved') },
             [pscustomobject]@{ Key='3'; Title=(Get-UiText 'Сбросить вход Autodesk' 'Reset Autodesk sign-in'); Desc=(Get-UiText 'Кэш текущего пользователя с резервной копией' 'Current user cache with backup') },
-            [pscustomobject]@{ Key='4'; Title=(Get-UiText 'Скачать / установить Licensing Service' 'Download / install Licensing Service'); Desc=(Get-UiText 'Официальный установщик Autodesk или локальный EXE' 'Official Autodesk installer or local EXE') },
+            [pscustomobject]@{ Key='4'; Title=(Get-UiText 'Скачать / установить Licensing Service' 'Download / install Licensing Service'); Desc=(Get-UiText 'GitHub Releases; официальный установщик Autodesk' 'GitHub Releases; official Autodesk installer') },
             [pscustomobject]@{ Key='5'; Title=(Get-UiText 'Скачать / установить Identity Manager' 'Download / install Identity Manager'); Desc=(Get-UiText 'Компонент входа для продуктов 2024 и новее' 'Sign-in component for products 2024 and newer') },
             [pscustomobject]@{ Key='6'; Title=(Get-UiText 'Переустановить Licensing Service' 'Reinstall Licensing Service'); Desc=(Get-UiText 'Сначала получить и проверить установщик, затем удалить старую службу' 'Obtain and verify the installer before removing the old service') },
             [pscustomobject]@{ Key='7'; Title=(Get-UiText 'Открыть резервные копии' 'Open backups'); Desc=(Get-LicenseRepairRoot) },
-            [pscustomobject]@{ Key='8'; Title='Network License Manager'; Desc=(Get-UiText 'GitHub Releases или официальный MSI; перед обновлением удалите старую версию NLM' 'GitHub Releases or official MSI; remove the old NLM version before upgrading') }
+            [pscustomobject]@{ Key='8'; Title='Network License Manager'; Desc=(Get-UiText 'GitHub Releases; перед обновлением удалите старую версию NLM' 'GitHub Releases; remove the old NLM version before upgrading') },
+            [pscustomobject]@{ Key='9'; Title=(Get-UiText 'Другой источник установщика' 'Alternative installer source'); Desc=(Get-UiText 'Autodesk или локальный EXE/MSI' 'Autodesk or local EXE/MSI') }
         )
         $choice = Show-Menu $items -Title (Get-UiText 'Восстановление лицензирования Autodesk' 'Autodesk licensing repair') -BackText (Get-UiText 'Назад' 'Back')
         if ($choice -eq '0') { return }
@@ -3471,6 +3506,14 @@ function Invoke-ModuleLicense {
                 '6' { Invoke-AutodeskComponentInstall Licensing -Reinstall }
                 '7' { $root = Get-LicenseRepairRoot; if (Test-Path -LiteralPath $root) { Start-Process explorer.exe -ArgumentList ('"' + $root + '"') } }
                 '8' { Invoke-AutodeskComponentInstall NLM }
+                '9' {
+                    $component = Read-Text -Label (Get-UiText 'Компонент: 1 — Licensing, 2 — Identity, 3 — NLM, Enter — отмена' 'Component: 1 — Licensing, 2 — Identity, 3 — NLM, Enter to cancel')
+                    switch ($component) {
+                        '1' { Invoke-AutodeskComponentInstall Licensing -AlternativeSource }
+                        '2' { Invoke-AutodeskComponentInstall Identity -AlternativeSource }
+                        '3' { Invoke-AutodeskComponentInstall NLM -AlternativeSource }
+                    }
+                }
             }
         } catch { Write-Fail $_.Exception.Message }
         Wait-Menu

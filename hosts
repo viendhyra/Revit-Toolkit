@@ -1,0 +1,229 @@
+# Copyright (c) 1993-2009 Microsoft Corp.
+#
+# This is a sample HOSTS file used by Microsoft TCP/IP for Windows.
+#
+# This file contains the mappings of IP addresses to host names. Each
+# entry should be kept on an individual line. The IP address should
+# be placed in the first column followed by the corresponding host name.
+# The IP address and the host name should be separated by at least one
+# space.
+#
+# Additionally, comments (such as these) may be inserted on individual
+# lines or following the machine name denoted by a '#' symbol.
+#
+# For example:
+#
+#      102.54.94.97     rhino.acme.com          # source server
+#       38.25.63.10     x.acme.com              # x client host
+
+# localhost name resolution is handled within DNS itself.
+#	127.0.0.1       localhost
+#	::1             localhost
+127.0.0.1 genuine-software.autodesk.com 
+127.0.0.1 genuine-software1.autodesk.com 
+127.0.0.1 genuine-software2.autodesk.com 
+
+127.0.0.1 lmlicenses.wip4.adobe.com
+127.0.0.1 lm.licenses.adobe.com
+127.0.0.1 na1r.services.adobe.com
+127.0.0.1 hlrcv.stage.adobe.com
+127.0.0.1 practivate.adobe.com
+127.0.0.1 genuine.adobe.com
+127.0.0.1 prod.adobegenuine.com
+127.0.0.1 lm-prd-da1.licenses.adobe.com
+127.0.0.1 activate.wip4.adobe.com
+127.0.0.1 practivate-da1.adobe.com
+127.0.0.1 uds.licenses.adobe.com
+127.0.0.1 license.adobe.com
+127.0.0.1 helpexamples.com
+127.0.0.1 activate-sea.adobe.com
+127.0.0.1 activate-sjc0.adobe.com
+127.0.0.1 ereg.adobe.com
+127.0.0.1 activate.wip3.adobe.com
+127.0.0.1 ereg.wip3.adobe.com
+127.0.0.1 wwis-dubc1-vip60.adobe.com
+
+127.0.0.1	wit-ams-cloudservice.cloudapp.net
+127.0.0.1	bimx-api.graphisoft.com
+127.0.0.1	graphisoftid-subtest.graphisoft.com
+127.0.0.1	graphisoftid-test.graphisoft.com
+127.0.0.1	graphisoftid.graphisoft.com
+127.0.0.1	ruleservice-api-subscr-test.graphisoft.com
+127.0.0.1	ruleservice-api-test.graphisoft.com
+127.0.0.1	ruleservice-api.graphisoft.com
+127.0.0.1	licensemanager-subtest.graphisoft.com
+127.0.0.1	licensemanager.graphisoft.com
+127.0.0.1	licensemanager-test.graphisoft.com
+127.0.0.1	license-manager-api.azurewebsites.net
+127.0.0.1	license.graphisoft.com
+127.0.0.1	license-test.graphisoft.com
+127.0.0.1	waws-prod-am2-069.vip.azurewebsites.windows.net
+127.0.0.1	waws-prod-am2-069.cloudapp.net
+127.0.0.1	e5486.g.akamaiedge.net
+127.0.0.1	e8218.dscb1.akamaiedge.net
+127.0.0.1	par10s22-in-f232.1e100.net
+127.0.0.1	par10s28-in-f8.1e100.net
+127.0.0.1	par10s34-in-f8.1e100.net
+127.0.0.1	gs-com.cloudapp.net
+127.0.0.1	usagelogger.graphisoft.com
+127.0.0.1	poneytelecom.eu
+127.0.0.1	swupdate.graphisoft.com
+127.0.0.1	redirect.graphisoft.com
+127.0.0.1	mx-inet03.maxon.net
+127.0.0.1	mx-inet05.maxon.net
+127.0.0.1	mx-inet08.maxon.net
+127.0.0.1	surveys.graphisoft.com
+127.0.0.1	par10s41-in-f3.1e100.net
+127.0.0.1	e28142.dscg.akamaiedge.net
+127.0.0.1	download.maxon.net
+127.0.0.1	dudbeo7xzkg6c.cloudfront.net
+127.0.0.1	e28142.d.akamaiedge.net
+127.0.0.1	server-52-84-177-187.cdg50.r.cloudfront.net
+127.0.0.1	a23-72-248-212.deploy.static.akamaitechnologies.com
+127.0.0.1 genuine-software2.autodesk.com
+127.0.0.2 genuine-software2.autodesk.com
+127.0.0.1 ase-cdn-stg.autodesk.com
+127.0.0.1 ase.autodesk.com
+0.0.0.0 api.genuine.autodesk.com
+0.0.0.0 ase.autodesk.com
+0.0.0.0 genuine-software.autodesk.com
+0.0.0.0 genuine-software1.autodesk.com
+0.0.0.0 genuine-software2.autodesk.com
+#
+# Block Autodesk AutoCAD Servers
+#
+0.0.0.0 autodesk.fi
+0.0.0.0 autodesk.de
+0.0.0.0 autodesk.es
+0.0.0.0 autodesk.ca
+0.0.0.0 autodesk.dk
+0.0.0.0 autodesk.pl
+0.0.0.0 ns1.autodesk.com
+0.0.0.0 ns2.autodesk.com
+0.0.0.0 ns3.autodesk.com
+0.0.0.0 a.gtld-servers.net
+0.0.0.0 b.gtld-servers.net
+0.0.0.0 c.gtld-servers.net
+0.0.0.0 d.gtld-servers.net
+0.0.0.0 e.gtld-servers.net
+0.0.0.0 f.gtld-servers.net
+0.0.0.0 g.gtld-servers.net
+0.0.0.0 h.gtld-servers.net
+0.0.0.0 i.gtld-servers.net
+0.0.0.0 j.gtld-servers.net
+0.0.0.0 k.gtld-servers.net
+0.0.0.0 l.gtld-servers.net
+0.0.0.0 ns1.autodesk.com
+0.0.0.0 m.gtld-servers.net
+0.0.0.0 adobeereg.com
+0.0.0.0 126114-app1.autodesk.com
+0.0.0.0 94175-app1.autodesk.com
+0.0.0.0 94184-app2.autodesk.com
+0.0.0.0 96579-lbal1.autodesk.com
+0.0.0.0 acamp.autodesk.com
+0.0.0.0 adeskdi3.autodesk.com
+0.0.0.0 adeskdmzpdc.autodesk.com
+0.0.0.0 adeskgate.autodesk.com
+0.0.0.0 adesknews2.autodesk.com
+0.0.0.0 adeskout.autodesk.com
+0.0.0.0 adsknateur.autodesk.com
+0.0.0.0 amernetlog.autodesk.com
+0.0.0.0 app5.autodesk.com
+0.0.0.0 aprimo-relay1.autodesk.com
+0.0.0.0 aprimo-relay2.autodesk.com
+0.0.0.0 aprimo-relay3.autodesk.com
+0.0.0.0 aprimo-relay4.autodesk.com
+0.0.0.0 autosketch.autodesk.com
+0.0.0.0 blues.autodesk.com
+0.0.0.0 cbuanprd.autodesk.com
+0.0.0.0 cbuanprhcllb.autodesk.com
+0.0.0.0 cbuanqa2lb.autodesk.com
+0.0.0.0 ci3dwsdev-svc.autodesk.com
+0.0.0.0 ci3dwsprd-svc.autodesk.com
+0.0.0.0 ci3dwsstg-svc.autodesk.com
+0.0.0.0 community.autodesk.com
+0.0.0.0 cut.autodesk.com
+0.0.0.0 cvsprd01.autodesk.com
+0.0.0.0 discussion.autodesk.com
+0.0.0.0 eur.autodesk.com
+0.0.0.0 extcidev.autodesk.com
+0.0.0.0 extciqa.autodesk.com
+0.0.0.0 extupg.autodesk.com
+0.0.0.0 ftp-users.autodesk.com
+0.0.0.0 ftp2b.autodesk.com
+0.0.0.0 gisdmzpdc.autodesk.com
+0.0.0.0 hqaribasrf04.autodesk.com
+0.0.0.0 hqmgwww01.autodesk.com
+0.0.0.0 hqmgwww04.autodesk.com
+0.0.0.0 hqmobileweb01.autodesk.com
+0.0.0.0 hqprxsrftrn.autodesk.com
+0.0.0.0 hqpsweb01.autodesk.com
+0.0.0.0 hubdev-svc.autodesk.com
+0.0.0.0 hubprd-svc.autodesk.com
+0.0.0.0 hubstg-svc.autodesk.com
+0.0.0.0 itappprd01-svc.autodesk.com
+0.0.0.0 itappprd02-svc.autodesk.com
+0.0.0.0 its.autodesk.com
+0.0.0.0 jdevextv-new.autodesk.com
+0.0.0.0 jp.autodesk.com
+0.0.0.0 jstgextv-new.autodesk.com
+0.0.0.0 jstgintv-new.autodesk.com
+0.0.0.0 lbsvzw.autodesk.com
+0.0.0.0 lbsvzw1.autodesk.com
+0.0.0.0 lbsvzw2.autodesk.com
+0.0.0.0 library.autodesk.com
+0.0.0.0 liveupdate.autodesk.com
+0.0.0.0 locationservices.autodesk.com
+0.0.0.0 lsctsol04.autodesk.com
+0.0.0.0 mail-relay.autodesk.com
+0.0.0.0 mneprdext-svc.autodesk.com
+0.0.0.0 mut.autodesk.com
+0.0.0.0 nbugma-dmz.autodesk.com
+0.0.0.0 ns1.autodesk.com
+0.0.0.0 ns2.autodesk.com
+0.0.0.0 ns3.autodesk.com
+0.0.0.0 ns4.autodesk.com
+0.0.0.0 ns5.autodesk.com
+0.0.0.0 nut.autodesk.com
+0.0.0.0 otw-new.autodesk.com
+0.0.0.0 otwdownloads.autodesk.com
+0.0.0.0 partnercenter.autodesk.com
+0.0.0.0 partnerproducts.autodesk.com
+0.0.0.0 paste.autodesk.com
+0.0.0.0 pedidrq.autodesk.com
+0.0.0.0 pediqrx.autodesk.com
+0.0.0.0 petars1.autodesk.com
+0.0.0.0 petcp11ia-2nat.autodesk.com
+0.0.0.0 petcr12ihsrp2.autodesk.com
+0.0.0.0 phxgciv.autodesk.com
+0.0.0.0 phxgciv_dr.autodesk.com
+0.0.0.0 planix3d.autodesk.com
+0.0.0.0 pointa.autodesk.com
+0.0.0.0 register.autodesk.com
+0.0.0.0 registerallied-pr.autodesk.com
+0.0.0.0 registeronce.autodesk.com
+0.0.0.0 salestraining.autodesk.com
+0.0.0.0 searchnews.autodesk.com
+0.0.0.0 shop.autodesk.com
+0.0.0.0 spamster-bulk.autodesk.com
+0.0.0.0 sswwwp.autodesk.com
+0.0.0.0 trialdownload.autodesk.com
+0.0.0.0 usa.autodesk.com
+0.0.0.0 uspetcr12ie_198.autodesk.com
+0.0.0.0 uspetcr12if.autodesk.com
+0.0.0.0 uspetcr12if_198.autodesk.com
+0.0.0.0 uspetcrs12ia_ib_vlan500_2_hsrp.autodesk.com
+0.0.0.0 uspetcrs12ia_vlan500_2.autodesk.com
+0.0.0.0 uspetcrs12ib_vlan500_2.autodesk.com
+0.0.0.0 uspetne06ia_ib_untrust_dip7.autodesk.com
+0.0.0.0 usrelay.autodesk.com
+0.0.0.0 ussclout1.autodesk.com
+0.0.0.0 vzwlpsrel.autodesk.com
+0.0.0.0 vzwlpstst.autodesk.com
+0.0.0.0 web.autodesk.com
+0.0.0.0 webservices.autodesk.com
+0.0.0.0 wormhole.autodesk.com
+0.0.0.0 www.autodesk.com
+0.0.0.0 www3.autodesk.com
+127.0.0.1 api.genuine-software.autodesk.com
+127.0.0.1 ase.autodesk.com
